@@ -8,6 +8,7 @@ from nova_manager.components.metrics.artefacts import EventsArtefacts
 class KeySource:
     EVENT_PROPERTIES = "event_properties"
     USER_PROFILE = "user_profile"
+    USER_EXPERIENCE = "user_experience"
 
 
 class TimeRange(TypedDict):
@@ -406,11 +407,22 @@ class QueryBuilder(EventsArtefacts):
 
         for item in group_by:
             key = item["key"]
+            source = item.get("source")
 
             if key in CORE_FIELDS:
                 selects.append(f"{event_table_alias}.{key} AS {key}")
             else:
-                selects.append(f"val_{key}.value AS {key}")
+                # Support multiple sources for grouped keys.
+                # For event properties we use alias ep_{key} (joined by _props_join_expression)
+                if source == KeySource.EVENT_PROPERTIES:
+                    selects.append(f"ep_{key}.value AS {key}")
+                elif source == KeySource.USER_PROFILE:
+                    selects.append(f"val_{key}.value AS {key}")
+                elif source == KeySource.USER_EXPERIENCE:
+                    # user_experience join aliases use ue_{key} and expose the column directly
+                    selects.append(f"ue_{key}.{key} AS {key}")
+                else:
+                    selects.append(f"val_{key}.value AS {key}")
 
         return selects
 
@@ -435,6 +447,22 @@ class QueryBuilder(EventsArtefacts):
             f"ON e.user_id = {alias}.user_id AND {alias}.key = '{key}' AND {alias}.rn = 1"
         )
 
+    def _user_experience_join_expression(self, alias: str, key: str) -> str:
+        """Return LEFT JOIN clause for the latest user_experience values per user.
+
+        This returns a LEFT JOIN on a subquery that selects user_id, the requested
+        column (key) and a ROW_NUMBER() partitioned by user_id ordered by assigned_at DESC
+        so that rn = 1 yields the latest assignment per user.
+        """
+        # Note: Uses the user_experience table name from EventsArtefacts
+        return (
+            f"LEFT JOIN ("
+            f"  SELECT user_id, {key}, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY assigned_at DESC) as rn "
+            f"  FROM `{self._user_experience_table_name()}` "
+            f") AS {alias} "
+            f"ON e.user_id = {alias}.user_id AND {alias}.rn = 1"
+        )
+
     def _group_props_join_expression(
         self, event_name: str, group_by: list[GroupByType]
     ) -> list[str]:
@@ -445,10 +473,15 @@ class QueryBuilder(EventsArtefacts):
             source = item["source"]
 
             if key not in CORE_FIELDS:
-                alias = f"val_{key}"
+                # Choose alias and join helper depending on source
                 if source == KeySource.EVENT_PROPERTIES:
+                    alias = f"ep_{key}"
                     joins.append(self._props_join_expression(event_name, alias, key))
-                else:  # User Profile
+                elif source == KeySource.USER_EXPERIENCE:
+                    alias = f"ue_{key}"
+                    joins.append(self._user_experience_join_expression(alias, key))
+                else:  # User Profile (default)
+                    alias = f"val_{key}"
                     joins.append(self._user_profile_join_expression(alias, key))
 
         return joins
@@ -473,9 +506,16 @@ class QueryBuilder(EventsArtefacts):
                 joins.append(self._props_join_expression(event_name, alias, key))
                 wheres.append(f"{alias}.value {op} '{value}'")
             else:  # User Profile
-                alias = f"up_{key}"
-                joins.append(self._user_profile_join_expression(alias, key))
-                wheres.append(f"{alias}.value {op} '{value}'")
+                # Support user_experience (personalisation) as a source too
+                if source == KeySource.USER_EXPERIENCE:
+                    alias = f"ue_{key}"
+                    joins.append(self._user_experience_join_expression(alias, key))
+                    # user_experience exposes the column directly (e.g. personalisation_id)
+                    wheres.append(f"{alias}.{key} {op} '{value}'")
+                else:
+                    alias = f"up_{key}"
+                    joins.append(self._user_profile_join_expression(alias, key))
+                    wheres.append(f"{alias}.value {op} '{value}'")
 
         return wheres, joins
 

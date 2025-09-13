@@ -83,6 +83,18 @@ async def compute_metric(
     # update config filters without segment placeholders
     config["filters"] = filters
 
+    # extract personalisation_ids array and move first value into filters
+    personalisation_ids = config.pop("personalisation_ids", None)
+    if personalisation_ids:
+        # take the first id and add as user_experience filter
+        first_id = personalisation_ids[0]
+        filters = config.setdefault("filters", {})
+        filters["personalisation_id"] = {
+            "value": first_id,
+            "source": "user_experience",
+            "op": "=",
+        }
+
     query_builder = QueryBuilder(organisation_id, app_id)
     query = query_builder.build_query(type, config)
 
