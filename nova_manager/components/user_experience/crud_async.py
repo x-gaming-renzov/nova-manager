@@ -6,6 +6,8 @@ from sqlalchemy import select, insert
 from sqlalchemy.orm import selectinload
 
 from nova_manager.components.user_experience.models import UserExperience
+from nova_manager.queues.controller import QueueController
+from nova_manager.components.metrics.events_controller import EventsController
 
 
 class UserExperienceAsyncCRUD:
@@ -85,8 +87,36 @@ class UserExperienceAsyncCRUD:
             }
             inserts_data.append(record_data)
 
-        # Single bulk insert - very efficient
-        stmt = insert(UserExperience).values(inserts_data)
+        if not inserts_data:
+            return
 
-        await self.db.execute(stmt)
+        # Use INSERT ... RETURNING to get the newly inserted row ids
+        stmt = insert(UserExperience).returning(UserExperience.id).values(inserts_data)
+
+        result = await self.db.execute(stmt)
+        try:
+            inserted_ids = list(result.scalars().all())
+        except Exception:
+            inserted_ids = []
+
+        # Commit the transaction so the rows are durable before enqueuing worker tasks
         await self.db.commit()
+
+        # If we have newly inserted ids, load ORM instances and enqueue BQ tasks
+        if inserted_ids:
+            sel = select(UserExperience).where(UserExperience.id.in_(inserted_ids))
+            res = await self.db.execute(sel)
+            instances = list(res.scalars().all())
+
+            # Enqueue a task per inserted instance using the existing EventsController
+            for inst in instances:
+                try:
+                    QueueController().add_task(
+                        EventsController(inst.organisation_id, inst.app_id).track_user_experience,
+                        inst,
+                    )
+                except Exception:
+                    # Swallow enqueue errors; BigQuery failure should not break main flow
+                    # Logging is deliberately omitted here to keep this method lightweight;
+                    # higher-level callers already log errors around DB operations.
+                    pass
