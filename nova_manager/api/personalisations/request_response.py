@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from nova_manager.api.experiences.request_response import ExperienceVariantResponse
 from nova_manager.components.experiences.schemas import ExperienceResponse
 from nova_manager.components.metrics.schemas import MetricResponse
+from nova_manager.components.segments.schemas import SegmentResponse
 
 
 class ExperienceFeatureVariantCreate(BaseModel):
@@ -24,6 +25,19 @@ class ExperienceVariantCreate(BaseModel):
 class PersonalisationCreateExperienceVariant(BaseModel):
     experience_variant: ExperienceVariantCreate
     target_percentage: int
+    
+class SegmentRuleCreate(BaseModel):
+    segment_id: UUIDType
+    rule_config: Dict[str, Any]
+    
+class SegmentRuleResponse(BaseModel):
+    pid: UUIDType
+    segment: SegmentResponse
+    rule_config: Dict[str, Any]
+
+    class Config:
+        from_attributes = True
+ 
 
 
 class PersonalisationCreate(BaseModel):
@@ -34,8 +48,8 @@ class PersonalisationCreate(BaseModel):
     rule_config: dict
     rollout_percentage: int
     selected_metrics: List[UUIDType] = []
-
     experience_variants: List[PersonalisationCreateExperienceVariant]
+    segments: Optional[List[SegmentRuleCreate]]
 
 
 class PersonalisationListResponse(BaseModel):
@@ -68,6 +82,7 @@ class PersonalisationDetailedResponse(BaseModel):
     is_active: bool
     experience_variants: List[PersonalisationExperienceVariantResponse]
     metrics: List[PersonalisationMetric] = []
+    segment_rules: List[SegmentRuleResponse] = []
 
 
 class ExperienceFeatureVariantUpdate(BaseModel):
@@ -98,5 +113,6 @@ class PersonalisationUpdate(BaseModel):
     rollout_percentage: Optional[int] = None
     selected_metrics: Optional[List[UUIDType]] = None
     experience_variants: Optional[List[PersonalisationUpdateExperienceVariant]] = None
+    segments: Optional[List[SegmentRuleCreate]] = None
 
     reassign: bool = False

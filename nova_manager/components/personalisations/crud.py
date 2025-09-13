@@ -133,6 +133,8 @@ class PersonalisationsCRUD(BaseCRUD):
         self, experience_id: UUIDType
     ) -> List[Personalisations]:
         """Get all personalisations for an experience"""
+        from nova_manager.components.personalisations.models import PersonalisationSegmentRules
+
         return (
             self.db.query(Personalisations)
             .options(
@@ -142,6 +144,8 @@ class PersonalisationsCRUD(BaseCRUD):
                 selectinload(Personalisations.metrics).selectinload(
                     PersonalisationMetrics.metric
                 ),
+                selectinload(Personalisations.segment_rules)
+                .selectinload(PersonalisationSegmentRules.segment),
             )
             .filter(Personalisations.experience_id == experience_id)
             .all()
@@ -316,6 +320,8 @@ class PersonalisationsCRUD(BaseCRUD):
 
     def get_detailed_personalisation(self, pid: UUIDType) -> Optional[Personalisations]:
         """Get a personalisation by ID with all its relationships loaded"""
+        from nova_manager.components.personalisations.models import PersonalisationSegmentRules
+
         return (
             self.db.query(Personalisations)
             .options(
@@ -326,6 +332,8 @@ class PersonalisationsCRUD(BaseCRUD):
                 selectinload(Personalisations.metrics).selectinload(
                     PersonalisationMetrics.metric
                 ),
+                selectinload(Personalisations.segment_rules)
+                .selectinload(PersonalisationSegmentRules.segment),
             )
             .filter(Personalisations.pid == pid)
             .first()
@@ -367,3 +375,9 @@ class PersonalisationsCRUD(BaseCRUD):
 class PersonalisationExperienceVariantsCRUD(BaseCRUD):
     def __init__(self, db: Session):
         super().__init__(PersonalisationExperienceVariants, db)
+ 
+class PersonalisationSegmentRulesCRUD(BaseCRUD):
+    """CRUD for personalisation-segment rules bridge table"""
+    def __init__(self, db: Session):
+        from nova_manager.components.personalisations.models import PersonalisationSegmentRules
+        super().__init__(PersonalisationSegmentRules, db)

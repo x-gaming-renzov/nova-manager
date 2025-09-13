@@ -22,6 +22,8 @@ from nova_manager.components.personalisations.crud import (
     PersonalisationsCRUD,
 )
 from nova_manager.components.personalisations.schemas import PersonalisationResponse
+from nova_manager.components.personalisations.crud import PersonalisationSegmentRulesCRUD
+from nova_manager.components.segments.crud import SegmentsCRUD
 from nova_manager.components.metrics.crud import (
     MetricsCRUD,
     PersonalisationMetricsCRUD,
@@ -31,7 +33,7 @@ router = APIRouter()
 
 
 # Personalisation endpoints
-@router.post("/create-personalisation/", response_model=PersonalisationResponse)
+@router.post("/create-personalisation/", response_model=PersonalisationDetailedResponse)
 async def create_personalisation(
     personalisation_data: PersonalisationCreate,
     auth: AuthContext = Depends(require_app_context),
@@ -212,8 +214,23 @@ async def create_personalisation(
             personalisation_metrics_crud.create_personalisation_metric(
                 personalisation_id=personalisation.pid, metric_id=metric_id
             )
+    # Create personalisation-segment rules
+    if getattr(personalisation_data, 'segments', None):
+        segments_crud = SegmentsCRUD(db)
+        seg_rules_crud = PersonalisationSegmentRulesCRUD(db)
+        for seg in personalisation_data.segments:
+            # validate segment exists and belongs to org/app
+            seg_obj = segments_crud.get_by_pid(seg.segment_id)
+            if not seg_obj or str(seg_obj.organisation_id) != str(auth.organisation_id) or seg_obj.app_id != auth.app_id:
+                raise HTTPException(status_code=400, detail=f"Segment not found or unauthorized: {seg.segment_id}")
+            seg_rules_crud.create({
+                "personalisation_id": personalisation.pid,
+                "segment_id": seg.segment_id,
+                "rule_config": seg.rule_config,
+            })
 
-    return personalisation
+    # Return full personalisation with segments, variants, metrics
+    return personalisations_crud.get_detailed_personalisation(personalisation.pid)
 
 
 @router.get("/", response_model=List[PersonalisationListResponse])
@@ -301,6 +318,37 @@ async def update_personalisation(
     try:
         # pass the Pydantic DTO so nested fields remain as objects
         updated = crud.update_personalisation(personalisation, update_data)
+        # Sync segment rules
+        if update_data.segments is not None:
+            segments_crud = SegmentsCRUD(db)
+            seg_rules_crud = PersonalisationSegmentRulesCRUD(db)
+            # map existing rules
+            existing = {str(r.segment_id): r for r in updated.segment_rules}
+            # incoming payload
+            incoming = {str(s.segment_id): s for s in update_data.segments}
+            # update or create
+            for seg_id, seg in incoming.items():
+                # validate segment exists
+                seg_obj = segments_crud.get_by_pid(seg.segment_id)
+                if not seg_obj or str(seg_obj.organisation_id) != str(auth.organisation_id) or seg_obj.app_id != auth.app_id:
+                    raise HTTPException(status_code=400, detail=f"Segment not found or unauthorized: {seg.segment_id}")
+                if seg_id in existing:
+                    rule = existing[seg_id]
+                    rule.rule_config = seg.rule_config
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(rule, "rule_config")
+                else:
+                    seg_rules_crud.create({
+                        "personalisation_id": updated.pid,
+                        "segment_id": seg.segment_id,
+                        "rule_config": seg.rule_config,
+                    })
+            # delete removed
+            for seg_id, rule in existing.items():
+                if seg_id not in incoming:
+                    db.delete(rule)
+            db.flush()
+            db.refresh(updated)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

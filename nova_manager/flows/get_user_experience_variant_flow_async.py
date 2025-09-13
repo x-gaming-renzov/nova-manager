@@ -163,6 +163,16 @@ class GetUserExperienceVariantFlowAsync:
                 ):
                     continue
 
+                # Enforce segment membership if any segment rules are configured
+                if personalisation.segment_rules:
+                    if not any(
+                        self.rule_evaluator.evaluate_rule(
+                            seg.rule_config, payload
+                        ) for seg in personalisation.segment_rules
+                    ):
+                        continue
+
+                # Check if user matches personalisation rule
                 rule_config = personalisation.rule_config
 
                 # Check if user matches rule
