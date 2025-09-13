@@ -270,7 +270,7 @@ async def create_app(
     )
 
     try:
-        events_controller = EventsController(auth.organisation_id, app.pid)
+        events_controller = EventsController(str(auth.organisation_id), str(app.pid))
 
         # Create dataset
         events_controller.create_dataset()

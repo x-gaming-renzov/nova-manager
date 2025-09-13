@@ -25,7 +25,8 @@ class TrackEvent(TypedDict):
 
 class EventsController(EventsArtefacts):
     def create_dataset(self):
-        BigQueryService().create_dataset_if_not_exists(self.dataset_name)
+        dataset_id = f"{GCP_PROJECT_ID}.{self.dataset_name}"
+        BigQueryService().create_dataset_if_not_exists(dataset_id)
 
     def create_raw_events_table(self):
         raw_events_table_name = f"{GCP_PROJECT_ID}.{self._raw_events_table_name()}"
