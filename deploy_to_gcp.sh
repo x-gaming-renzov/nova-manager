@@ -47,4 +47,5 @@ gcloud run deploy "nova-manager-worker" \
   --cpu=1 \
   --no-cpu-throttling \
   --concurrency=1 \
-  --min-instances=1
+  --min-instances=1 \
+  --max-instances=3
