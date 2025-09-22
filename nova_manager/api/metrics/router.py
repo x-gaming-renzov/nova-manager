@@ -58,12 +58,17 @@ async def compute_metric(
     app_id = auth.app_id
     type = compute_request.type
     # copy config and extract any segment filters embedded in filters
+    # copy config and extract filters
     config = compute_request.config.copy()
     filters = config.get("filters", {}) or {}
-    # identify segment filters by source flag
-    segment_ids = [sid for sid, f in filters.items() if isinstance(f, dict) and f.get("source") == "segment"]
-    # remove segment entries from filters
-    for sid in segment_ids:
+    # extract explicit segment_ids list from config
+    config_segment_ids = config.pop("segment_ids", []) or []
+    # identify segment filters embedded in filters by source flag
+    filter_segment_ids = [sid for sid, f in filters.items() if isinstance(f, dict) and f.get("source") == "segment"]
+    # combine both sources of segment ids
+    segment_ids = list(set(config_segment_ids + filter_segment_ids))
+    # remove any placeholder entries from filters
+    for sid in filter_segment_ids:
         filters.pop(sid, None)
     # merge each segment's conditions into filters
     if segment_ids:
