@@ -19,6 +19,7 @@ from nova_manager.components.personalisations.models import *  # noqa: F403
 from nova_manager.components.user_experience.models import *  # noqa: F403
 from nova_manager.components.metrics.models import *  # noqa: F403
 from nova_manager.components.recommendations.models import *  # noqa: F403
+from nova_manager.components.playground.models import *  # noqa: F403
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
