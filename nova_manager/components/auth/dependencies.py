@@ -7,7 +7,9 @@ from nova_manager.core.security import (
     decode_token_ignore_expiry,
     create_auth_context,
     validate_sdk_api_key,
+    validate_playground_session_token,
     create_sdk_auth_context,
+    is_playground_token,
     AuthContext,
     SDKAuthContext,
 )
@@ -160,7 +162,10 @@ async def get_sdk_auth(
     """Extract and validate auth context from JWT token"""
 
     token = credentials.credentials
-    payload = validate_sdk_api_key(token)
+    if is_playground_token(token):
+        payload = validate_playground_session_token(token)
+    else:
+        payload = validate_sdk_api_key(token)
 
     return create_sdk_auth_context(payload)
 
@@ -180,6 +185,20 @@ async def require_sdk_app_context(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="App context required",
+        )
+
+    return auth
+
+
+async def require_playground_session(
+    auth: SDKAuthContext = Depends(get_sdk_auth),
+) -> SDKAuthContext:
+    """Require a valid playground session token."""
+
+    if not auth.is_playground:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Playground session token required",
         )
 
     return auth

@@ -1,5 +1,7 @@
 import traceback
 from typing import Dict
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,8 +32,10 @@ async def get_user_experience_variant(
     try:
         flow = GetUserExperienceVariantFlowAsync(db)
 
+        user_id = _resolve_user_id(request.user_id, auth)
+
         result = await flow.get_user_experience_variant(
-            user_id=request.user_id,
+            user_id=user_id,
             experience_name=request.experience_name,
             organisation_id=auth.organisation_id,
             app_id=auth.app_id,
@@ -56,8 +60,10 @@ async def get_user_experiences(
     try:
         flow = GetUserExperienceVariantFlowAsync(db)
 
+        user_id = _resolve_user_id(request.user_id, auth)
+
         results = await flow.get_user_experience_variants(
-            user_id=request.user_id,
+            user_id=user_id,
             organisation_id=auth.organisation_id,
             app_id=auth.app_id,
             payload=request.payload,
@@ -85,8 +91,10 @@ async def get_all_user_experiences(
         flow = GetUserExperienceVariantFlowAsync(db)
 
         # Call without feature_names to get all variants
+        user_id = _resolve_user_id(request.user_id, auth)
+
         results = await flow.get_user_experience_variants(
-            user_id=request.user_id,
+            user_id=user_id,
             organisation_id=auth.organisation_id,
             app_id=auth.app_id,
             payload=request.payload,
@@ -98,3 +106,17 @@ async def get_all_user_experiences(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _resolve_user_id(request_user_id: UUID, auth: SDKAuthContext) -> UUID:
+    if auth.is_playground:
+        if not auth.user_id:
+            raise HTTPException(
+                status_code=400, detail="Playground token missing user context"
+            )
+        try:
+            return UUID(str(auth.user_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    return request_user_id

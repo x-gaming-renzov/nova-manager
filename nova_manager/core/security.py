@@ -9,7 +9,10 @@ from passlib.context import CryptContext
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 
-from nova_manager.core.config import JWT_SECRET_KEY
+from nova_manager.core.config import (
+    JWT_SECRET_KEY,
+    PLAYGROUND_TOKEN_TTL_MINUTES,
+)
 from nova_manager.core.enums import UserRole
 
 # Password hashing with bcrypt (12 rounds for security)
@@ -31,11 +34,19 @@ class AuthContext(BaseModel):
     role: UserRole  # User role in the organization
 
 
+PLAYGROUND_TOKEN_PREFIX = "nova_pg_"
+
+
 class SDKAuthContext(BaseModel):
     """SDK auth context extracted from JWT token"""
 
     organisation_id: str
     app_id: str
+    sdk_key: Optional[str] = None
+    is_playground: bool = False
+    playground_session_id: Optional[str] = None
+    personalisation_id: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 def hash_password(password: str) -> str:
@@ -247,7 +258,8 @@ def validate_sdk_api_key(api_key: str) -> dict:
         # Step 7: Return extracted data in expected format
         return {
             "organisation_id": str(org_uuid),
-            "app_id": str(app_uuid)
+            "app_id": str(app_uuid),
+            "sdk_key": api_key,
         }
         
     except Exception as e:
@@ -272,4 +284,82 @@ def create_sdk_auth_context(payload: dict) -> SDKAuthContext:
     return SDKAuthContext(
         organisation_id=payload.get("organisation_id", ""),
         app_id=payload.get("app_id", ""),
+        sdk_key=payload.get("sdk_key"),
+        is_playground=payload.get("type") == "playground",
+        playground_session_id=payload.get("session_id"),
+        personalisation_id=payload.get("personalisation_id"),
+        user_id=payload.get("user_id"),
     )
+
+
+def is_playground_token(token: str) -> bool:
+    return token.startswith(PLAYGROUND_TOKEN_PREFIX)
+
+
+def create_playground_session_token(
+    *,
+    session_id,
+    organisation_id: str,
+    app_id: str,
+    personalisation_id,
+    user_id,
+    sdk_key: str,
+    expires_at: datetime | None = None,
+) -> str:
+    issued_at = datetime.now(timezone.utc)
+    expiry = expires_at
+
+    if expiry is None and PLAYGROUND_TOKEN_TTL_MINUTES > 0:
+        expiry = issued_at + timedelta(minutes=PLAYGROUND_TOKEN_TTL_MINUTES)
+
+    payload = {
+        "type": "playground",
+        "session_id": str(session_id),
+        "organisation_id": organisation_id,
+        "app_id": app_id,
+        "personalisation_id": str(personalisation_id),
+        "user_id": str(user_id),
+        "sdk_key": sdk_key,
+        "iat": issued_at,
+    }
+
+    if expiry:
+        payload["exp"] = expiry
+
+    encoded = jwt.encode(payload, JWT_SECRET_KEY, algorithm=ALGORITHM)
+    return f"{PLAYGROUND_TOKEN_PREFIX}{encoded}"
+
+
+def validate_playground_session_token(token: str) -> dict:
+    if not is_playground_token(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid playground token format",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    raw = token[len(PLAYGROUND_TOKEN_PREFIX) :]
+
+    try:
+        payload = jwt.decode(raw, JWT_SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Playground session has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if payload.get("type") != "playground":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid playground token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return payload
