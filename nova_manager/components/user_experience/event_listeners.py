@@ -1,13 +1,6 @@
-from sqlalchemy import event
-
-from nova_manager.components.user_experience.models import UserExperience
-from nova_manager.components.metrics.events_controller import EventsController
-from nova_manager.queues.controller import QueueController
-
-
-@event.listens_for(UserExperience, "after_insert")
-def after_insert(mapper, connection, target: UserExperience):
-    QueueController().add_task(
-        EventsController(target.organisation_id, target.app_id).track_user_experience,
-        target,
-    )
+# ClickHouse tracking for UserExperience is handled directly in
+# UserExperienceAsyncCRUD.bulk_create_user_experience_personalisations
+# which passes external_user_id for analytics consistency.
+#
+# The previous after_insert listener was removed to avoid duplicate
+# ClickHouse writes and to allow passing external_user_id.

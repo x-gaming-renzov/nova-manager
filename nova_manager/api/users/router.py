@@ -52,7 +52,7 @@ async def create_user(
 
     QueueController().add_task(
         EventsController(organisation_id, app_id).track_user_profile,
-        nova_user_id,
+        user_id,
         old_profile,
         user_profile,
     )
@@ -93,7 +93,7 @@ async def update_user_profile(
 
     QueueController().add_task(
         EventsController(organisation_id, app_id).track_user_profile,
-        nova_user_id,
+        user_id,
         old_profile,
         user_profile,
     )

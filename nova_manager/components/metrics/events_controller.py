@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 import json
 from typing import TypedDict
-from uuid import UUID
 import uuid
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -122,7 +121,7 @@ class EventsController(EventsArtefacts):
             logger.error(f"ClickHouse insertion failed: {str(e)}")
             raise e
 
-    def track_events(self, user_id: UUID, events: list[TrackEvent]):
+    def track_events(self, user_id: str, events: list[TrackEvent]):
         logger.info(
             f"EventsController.track_events: user_id={user_id}, org={self.organisation_id}, app={self.app_id}, events={events}"
         )
@@ -232,7 +231,7 @@ class EventsController(EventsArtefacts):
 
     def track_event(
         self,
-        user_id: UUID,
+        user_id: str,
         event_name: str,
         event_data: dict | None = None,
         timestamp: datetime | None = None,
@@ -254,9 +253,10 @@ class EventsController(EventsArtefacts):
             ],
         )
 
-    def track_user_experience(self, user_experience: UserExperience):
+    def track_user_experience(self, user_experience: UserExperience, external_user_id: str | None = None):
+        ch_user_id = external_user_id if external_user_id else str(user_experience.user_id)
         user_experience_row = {
-            "user_id": str(user_experience.user_id),
+            "user_id": ch_user_id,
             "experience_id": str(user_experience.experience_id),
             "personalisation_id": str(user_experience.personalisation_id),
             "personalisation_name": user_experience.personalisation_name,
@@ -270,7 +270,7 @@ class EventsController(EventsArtefacts):
             self._user_experience_table_name(), [user_experience_row]
         )
 
-    def track_user_profile(self, user_id: UUID, old_profile: dict, user_profile: dict):
+    def track_user_profile(self, user_id: str, old_profile: dict, user_profile: dict):
         changed_profile = {
             key: value
             for key, value in user_profile.items()

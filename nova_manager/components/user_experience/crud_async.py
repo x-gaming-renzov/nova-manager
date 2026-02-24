@@ -58,6 +58,7 @@ class UserExperienceAsyncCRUD:
         organisation_id: str,
         app_id: str,
         personalisation_assignments: List[UserExperienceAssignment],
+        external_user_id: str | None = None,
     ) -> None:
         """
         Bulk create user experience personalisation records.
@@ -114,6 +115,7 @@ class UserExperienceAsyncCRUD:
                     QueueController().add_task(
                         EventsController(inst.organisation_id, inst.app_id).track_user_experience,
                         inst,
+                        external_user_id=external_user_id,
                     )
                 except Exception:
                     # Swallow enqueue errors; ClickHouse failure should not break main flow

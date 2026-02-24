@@ -38,7 +38,7 @@ class GetUserExperienceVariantFlowAsync:
 
     async def get_user_experience_variant(
         self,
-        user_id: UUID,
+        user_id: str,
         experience_name: str,
         organisation_id: str,
         app_id: str,
@@ -61,15 +61,15 @@ class GetUserExperienceVariantFlowAsync:
 
     async def get_user_experience_variants(
         self,
-        user_id: UUID,
+        user_id: str,
         organisation_id: str,
         app_id: str,
         payload: Dict[str, Any],
         experience_names: Optional[List[str]] = None,
     ) -> Dict[str, UserExperienceAssignment]:
-        # Step 1: Get user by pid
-        user = await self.users_crud.get_by_pid(
-            pid=user_id, organisation_id=organisation_id, app_id=app_id
+        # Step 1: Get user by external user_id
+        user = await self.users_crud.get_by_user_id(
+            user_id=user_id, organisation_id=organisation_id, app_id=app_id
         )
 
         if not user:
@@ -295,6 +295,7 @@ class GetUserExperienceVariantFlowAsync:
                     organisation_id=organisation_id,
                     app_id=app_id,
                     personalisation_assignments=new_assignments,
+                    external_user_id=user.user_id,
                 )
             except Exception as e:
                 logger.error(

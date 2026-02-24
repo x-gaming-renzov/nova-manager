@@ -12,9 +12,8 @@ from nova_manager.core.exceptions import (
 from nova_manager.core.log import configure_logging
 from nova_manager.middlewares.exceptions import ExceptionMiddleware
 
-# Import event listeners to register them with SQLAlchemy
-# import nova_manager.components.users.event_listeners  # noqa: F401
-import nova_manager.components.user_experience.event_listeners  # noqa: F401
+# Event listeners: user_experience ClickHouse tracking is handled directly
+# in UserExperienceAsyncCRUD.bulk_create_user_experience_personalisations
 
 from nova_manager.api.auth.router import router as auth_router
 from nova_manager.api.feature_flags.router import router as feature_flags_router

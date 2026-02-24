@@ -1,4 +1,4 @@
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID as UUIDType
 from datetime import datetime
 from pydantic import BaseModel
@@ -9,6 +9,17 @@ class TrackEventRequest(BaseModel):
     timestamp: datetime
     event_name: str
     event_data: dict | None
+
+
+class TrackEventItem(BaseModel):
+    event_name: str
+    event_data: dict | None = None
+    timestamp: datetime
+
+
+class TrackEventsRequest(BaseModel):
+    user_id: str
+    events: List[TrackEventItem]
 
 
 class CreateMetricRequest(BaseModel):

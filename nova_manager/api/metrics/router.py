@@ -7,6 +7,7 @@ from nova_manager.api.metrics.request_response import (
     EventsSchemaResponse,
     MetricResponse,
     TrackEventRequest,
+    TrackEventsRequest,
     UserProfileKeyResponse,
 )
 from nova_manager.components.metrics.crud import (
@@ -46,6 +47,30 @@ async def track_event(
     )
 
     return {"success": True}
+
+
+@router.post("/track-events/")
+async def track_events(
+    request: TrackEventsRequest,
+    auth: SDKAuthContext = Depends(require_sdk_app_context),
+):
+    """Track multiple events in a single request."""
+    events = [
+        {
+            "event_name": e.event_name,
+            "event_data": e.event_data,
+            "timestamp": e.timestamp,
+        }
+        for e in request.events
+    ]
+
+    QueueController().add_task(
+        EventsController(auth.organisation_id, auth.app_id).track_events,
+        request.user_id,
+        events,
+    )
+
+    return {"success": True, "count": len(events)}
 
 
 @router.post("/compute/", response_model=List[Dict])
