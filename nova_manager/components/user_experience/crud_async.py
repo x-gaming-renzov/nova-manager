@@ -116,7 +116,7 @@ class UserExperienceAsyncCRUD:
                         inst,
                     )
                 except Exception:
-                    # Swallow enqueue errors; BigQuery failure should not break main flow
+                    # Swallow enqueue errors; ClickHouse failure should not break main flow
                     # Logging is deliberately omitted here to keep this method lightweight;
                     # higher-level callers already log errors around DB operations.
                     pass

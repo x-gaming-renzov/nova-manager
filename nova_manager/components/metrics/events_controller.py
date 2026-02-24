@@ -7,14 +7,13 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from nova_manager.database.session import db_session
 from nova_manager.core.log import logger
-from nova_manager.service.bigquery import BigQueryService
+from nova_manager.service.clickhouse_service import ClickHouseService
 
 from nova_manager.components.metrics.artefacts import EventsArtefacts
 from nova_manager.components.metrics.crud import EventsSchemaCRUD, UserProfileKeysCRUD
 from nova_manager.components.user_experience.models import UserExperience
 from nova_manager.components.metrics.models import EventsSchema
 from nova_manager.components.users.models import Users
-from nova_manager.core.config import GCP_PROJECT_ID
 
 
 class TrackEvent(TypedDict):
@@ -24,167 +23,103 @@ class TrackEvent(TypedDict):
 
 
 class EventsController(EventsArtefacts):
-    def create_dataset(self):
-        dataset_id = f"{GCP_PROJECT_ID}.{self.dataset_name}"
-        BigQueryService().create_dataset_if_not_exists(dataset_id)
+    def create_database(self):
+        ClickHouseService().create_database_if_not_exists(self.database_name)
 
     def create_raw_events_table(self):
-        raw_events_table_name = f"{GCP_PROJECT_ID}.{self._raw_events_table_name()}"
+        ddl = f"""
+        CREATE TABLE IF NOT EXISTS {self._raw_events_table_name()} (
+            event_id String,
+            user_id String,
+            event_name String,
+            event_data String,
+            client_ts DateTime64(3),
+            server_ts DateTime64(3)
+        ) ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(client_ts)
+        ORDER BY (event_name, user_id, client_ts)
+        """
+        ClickHouseService().create_table_if_not_exists(ddl)
+        return self._raw_events_table_name()
 
-        try:
-            BigQueryService().create_table_if_not_exists(
-                raw_events_table_name,
-                schema=[
-                    {"name": "event_id", "type": "STRING"},
-                    {"name": "user_id", "type": "STRING"},
-                    {"name": "client_ts", "type": "TIMESTAMP"},
-                    {"name": "server_ts", "type": "TIMESTAMP"},
-                    {"name": "event_name", "type": "STRING"},
-                    {"name": "event_data", "type": "STRING"},
-                ],
-                partition_field="client_ts",
-                clustering_fields=["event_name", "user_id"],
-            )
-        except Exception as e:
-            logger.error(f"Failed to create raw events table: {str(e)}")
-            raise e
-
-        return raw_events_table_name
-
-    def create_event_table(self, event_name: str):
-        event_table_name = f"{GCP_PROJECT_ID}.{self._event_table_name(event_name)}"
-
-        # Create event table if not exists
-        event_table_schema = [
-            {"name": "event_id", "type": "STRING"},
-            {"name": "user_id", "type": "STRING"},
-            {"name": "event_name", "type": "STRING"},
-            {"name": "client_ts", "type": "TIMESTAMP"},
-            {"name": "server_ts", "type": "TIMESTAMP"},
-        ]
-
-        BigQueryService().create_table_if_not_exists(
-            event_table_name,
-            event_table_schema,
-            partition_field="client_ts",
-            clustering_fields=["event_name", "user_id"],
-        )
-
-        return event_table_name
-
-    def create_event_props_table(self, event_name: str):
-        event_props_table_name = (
-            f"{GCP_PROJECT_ID}.{self._event_props_table_name(event_name)}"
-        )
-
-        # Create event props table if not exists
-        event_props_table_schema = [
-            {"name": "event_id", "type": "STRING"},
-            {"name": "user_id", "type": "STRING"},
-            {"name": "event_name", "type": "STRING"},
-            {"name": "key", "type": "STRING"},
-            {"name": "value", "type": "STRING"},
-            {"name": "client_ts", "type": "TIMESTAMP"},
-            {"name": "server_ts", "type": "TIMESTAMP"},
-        ]
-
-        BigQueryService().create_table_if_not_exists(
-            event_props_table_name,
-            event_props_table_schema,
-            partition_field="client_ts",
-            clustering_fields=["event_name", "user_id"],
-        )
-
-        return event_props_table_name
+    def create_event_props_table(self):
+        ddl = f"""
+        CREATE TABLE IF NOT EXISTS {self._event_props_table_name()} (
+            event_id String,
+            user_id String,
+            event_name String,
+            key String,
+            value String,
+            client_ts DateTime64(3),
+            server_ts DateTime64(3)
+        ) ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(client_ts)
+        ORDER BY (event_name, user_id, key, client_ts)
+        """
+        ClickHouseService().create_table_if_not_exists(ddl)
+        return self._event_props_table_name()
 
     def create_user_profile_table(self):
-        user_profile_table_name = (
-            f"{GCP_PROJECT_ID}.{self._user_profile_props_table_name()}"
-        )
-
-        logger.info(f"Creating user profile table: {user_profile_table_name}")
-
-        user_profile_table_schema = [
-            {"name": "user_id", "type": "STRING"},
-            {"name": "key", "type": "STRING"},
-            {"name": "value", "type": "STRING"},
-            {"name": "server_ts", "type": "TIMESTAMP"},
-        ]
-
+        ddl = f"""
+        CREATE TABLE IF NOT EXISTS {self._user_profile_props_table_name()} (
+            user_id String,
+            key String,
+            value String,
+            server_ts DateTime64(3)
+        ) ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(server_ts)
+        ORDER BY (user_id, key, server_ts)
+        """
         try:
-            BigQueryService().create_table_if_not_exists(
-                user_profile_table_name,
-                user_profile_table_schema,
-                partition_field="server_ts",
-                clustering_fields=["user_id", "key"],
-            )
+            ClickHouseService().create_table_if_not_exists(ddl)
             logger.info(
-                f"User profile table created/confirmed: {user_profile_table_name}"
+                f"User profile table created/confirmed: {self._user_profile_props_table_name()}"
             )
         except Exception as e:
             logger.error(f"Failed to create user profile table: {str(e)}")
             raise e
 
-        return user_profile_table_name
+        return self._user_profile_props_table_name()
 
     def create_user_experience_table(self):
-        user_experience_table_name = (
-            f"{GCP_PROJECT_ID}.{self._user_experience_table_name()}"
-        )
-
+        ddl = f"""
+        CREATE TABLE IF NOT EXISTS {self._user_experience_table_name()} (
+            user_id String,
+            experience_id String,
+            personalisation_id String,
+            personalisation_name String,
+            experience_variant_id String,
+            features String,
+            evaluation_reason String,
+            assigned_at DateTime64(3)
+        ) ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(assigned_at)
+        ORDER BY (user_id, experience_id, assigned_at)
+        """
         try:
-            BigQueryService().create_table_if_not_exists(
-                user_experience_table_name,
-                schema=[
-                    {"name": "user_id", "type": "STRING"},
-                    {"name": "experience_id", "type": "STRING"},
-                    {"name": "personalisation_id", "type": "STRING"},
-                    {"name": "personalisation_name", "type": "STRING"},
-                    {"name": "experience_variant_id", "type": "STRING"},
-                    {"name": "features", "type": "STRING"},
-                    {"name": "evaluation_reason", "type": "STRING"},
-                    {"name": "assigned_at", "type": "TIMESTAMP"},
-                ],
-                partition_field="assigned_at",
-                clustering_fields=["user_id", "experience_id", "personalisation_id"],
-            )
+            ClickHouseService().create_table_if_not_exists(ddl)
         except Exception as e:
             logger.error(f"Failed to create user experience table: {str(e)}")
             raise e
 
-        return user_experience_table_name
+        return self._user_experience_table_name()
 
-    def push_to_bigquery(
+    def push_to_clickhouse(
         self,
         raw_events_rows: list[dict],
-        event_table_rows: dict,
-        event_props_table_rows: dict,
+        event_props_rows: list[dict],
     ):
         try:
-            raw_events_table_name = self._raw_events_table_name()
-            errors = BigQueryService().insert_rows(
-                raw_events_table_name, raw_events_rows
-            )
+            ch = ClickHouseService()
 
-            if errors:
-                raise Exception(str(errors))
+            if raw_events_rows:
+                ch.insert_rows(self._raw_events_table_name(), raw_events_rows)
 
-            for event_name, row in event_table_rows.items():
-                event_table_name = self._event_table_name(event_name)
-
-                errors = BigQueryService().insert_rows(event_table_name, [row])
-                if errors:
-                    raise Exception(str(errors))
-
-            for event_name, rows in event_props_table_rows.items():
-                event_props_table_name = self._event_props_table_name(event_name)
-
-                errors = BigQueryService().insert_rows(event_props_table_name, rows)
-                if errors:
-                    raise Exception(str(errors))
+            if event_props_rows:
+                ch.insert_rows(self._event_props_table_name(), event_props_rows)
 
         except Exception as e:
-            logger.error(f"BigQuery insertion failed: {str(e)}")
+            logger.error(f"ClickHouse insertion failed: {str(e)}")
             raise e
 
     def track_events(self, user_id: UUID, events: list[TrackEvent]):
@@ -194,8 +129,7 @@ class EventsController(EventsArtefacts):
         time_now = datetime.now(timezone.utc)
 
         raw_events_rows = []
-        event_table_rows = {}
-        event_props_table_rows = {}
+        all_event_props_rows = []
 
         unique_event_names = list(set([event["event_name"] for event in events]))
 
@@ -218,9 +152,7 @@ class EventsController(EventsArtefacts):
 
         for event_name in unique_event_names:
             if event_name not in events_schema_map:
-                logger.info(f"Creating BigQuery tables for new event: {event_name}")
-                self.create_event_table(event_name)
-                self.create_event_props_table(event_name)
+                # With unified tables, no per-event table creation needed
                 events_schema_map[event_name] = {}
                 new_events.append(event_name)
             else:
@@ -243,28 +175,18 @@ class EventsController(EventsArtefacts):
                 {
                     "event_id": event_id,
                     "user_id": str(user_id),
-                    "client_ts": timestamp.isoformat(),
-                    "server_ts": time_now.isoformat(),
                     "event_name": event_name,
                     "event_data": json.dumps(event_data),
+                    "client_ts": timestamp.isoformat(),
+                    "server_ts": time_now.isoformat(),
                 }
             )
-
-            event_table_rows[event_name] = {
-                "event_id": event_id,
-                "user_id": str(user_id),
-                "event_name": event_name,
-                "client_ts": timestamp.isoformat(),
-                "server_ts": time_now.isoformat(),
-            }
-
-            event_props_table_rows[event_name] = []
 
             for key in event_data:
                 if key not in event_properties:
                     event_properties[key] = {"type": type(event_data[key]).__name__}
 
-                event_props_table_rows[event_name].append(
+                all_event_props_rows.append(
                     {
                         "event_id": event_id,
                         "user_id": str(user_id),
@@ -279,8 +201,9 @@ class EventsController(EventsArtefacts):
             event_schema["properties"].update(event_properties)
             events_schema_map[event_name] = event_schema
 
-        self.push_to_bigquery(raw_events_rows, event_table_rows, event_props_table_rows)
+        self.push_to_clickhouse(raw_events_rows, all_event_props_rows)
 
+        # Update event schemas in PostgreSQL (unchanged)
         with db_session() as db:
             crud = EventsSchemaCRUD(db)
 
@@ -332,9 +255,6 @@ class EventsController(EventsArtefacts):
         )
 
     def track_user_experience(self, user_experience: UserExperience):
-        # TODO: Remove creation of table here
-        user_experience_table_name = self.create_user_experience_table()
-
         user_experience_row = {
             "user_id": str(user_experience.user_id),
             "experience_id": str(user_experience.experience_id),
@@ -346,19 +266,18 @@ class EventsController(EventsArtefacts):
             "assigned_at": user_experience.assigned_at.isoformat(),
         }
 
-        BigQueryService().insert_rows(user_experience_table_name, [user_experience_row])
+        ClickHouseService().insert_rows(
+            self._user_experience_table_name(), [user_experience_row]
+        )
 
     def track_user_profile(self, user_id: UUID, old_profile: dict, user_profile: dict):
-        # TODO: Remove creation of table here
-        user_profile_table_name = self.create_user_profile_table()
-
         changed_profile = {
             key: value
             for key, value in user_profile.items()
             if key not in old_profile or old_profile[key] != value
         }
 
-        # Create user profile key entries for new keys
+        # Create user profile key entries for new keys in PostgreSQL
         if changed_profile:
             try:
                 with db_session() as db:
@@ -373,15 +292,17 @@ class EventsController(EventsArtefacts):
             except Exception as e:
                 logger.error(f"Failed to create user profile keys: {e}")
 
-            # Track user profile data to BigQuery
+            # Track user profile data to ClickHouse
             user_profile_rows = [
                 {
                     "user_id": str(user_id),
                     "key": key,
-                    "value": str(changed_profile[key]),  # Convert all values to strings
+                    "value": str(changed_profile[key]),
                     "server_ts": datetime.now(timezone.utc).isoformat(),
                 }
                 for key in changed_profile
             ]
 
-            BigQueryService().insert_rows(user_profile_table_name, user_profile_rows)
+            ClickHouseService().insert_rows(
+                self._user_profile_props_table_name(), user_profile_rows
+            )

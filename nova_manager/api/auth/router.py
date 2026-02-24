@@ -272,11 +272,14 @@ async def create_app(
     try:
         events_controller = EventsController(str(auth.organisation_id), str(app.pid))
 
-        # Create dataset
-        events_controller.create_dataset()
+        # Create ClickHouse database
+        events_controller.create_database()
 
         # Create raw events table
         events_controller.create_raw_events_table()
+
+        # Create event props table (unified)
+        events_controller.create_event_props_table()
 
         # Create user profile table
         events_controller.create_user_profile_table()
@@ -284,10 +287,10 @@ async def create_app(
         # Create user experience table
         events_controller.create_user_experience_table()
     except Exception as e:
-        logger.error(f"Failed to provision core BigQuery tables for app {app.pid}: {e}")
+        logger.error(f"Failed to provision analytics tables for app {app.pid}: {e}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to provision BigQuery tables",
+            detail="Failed to provision analytics tables",
         )
 
     # Create new tokens with the new app context

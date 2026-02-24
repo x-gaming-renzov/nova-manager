@@ -61,12 +61,13 @@ class RetentionMetricConfig(BaseMetricConfig):
     retention_window: str
 
 
+# ClickHouse time truncation functions
 GRANULARITY_TRUNC_MAP = {
-    "hourly": "TIMESTAMP_TRUNC({ts}, HOUR)",
-    "daily": "DATE_TRUNC({ts}, DAY)",
-    "weekly": "DATE_TRUNC({ts}, WEEK)",
-    "monthly": "DATE_TRUNC({ts}, MONTH)",
-    "none": "TIMESTAMP('1970-01-01 00:00:00')",
+    "hourly": "toStartOfHour({ts})",
+    "daily": "toStartOfDay({ts})",
+    "weekly": "toMonday({ts})",
+    "monthly": "toStartOfMonth({ts})",
+    "none": "toDateTime('1970-01-01 00:00:00')",
 }
 
 UNIT_SQL_MAP = {
@@ -118,19 +119,20 @@ class QueryBuilder(EventsArtefacts):
         select_parts = self._get_select_parts(metric_config)
 
         count_expression = (
-            "COUNT(DISTINCT e.user_id) AS value" if distinct else "COUNT(*) AS value"
+            "uniqExact(e.user_id) AS value" if distinct else "COUNT(*) AS value"
         )
         select_parts.append(count_expression)
 
         select_expression = "SELECT " + ",\n    ".join(select_parts)
 
-        table_name = self._event_table_name(event_name)
-        from_expression = f"FROM `{table_name}` AS e"
+        # Unified table: query raw_events with event_name filter
+        table_name = self._raw_events_table_name()
+        from_expression = f"FROM {table_name} AS e"
 
         wheres, where_joins = self._wheres_and_joins(event_name, filters)
 
         where_expression = (
-            f"WHERE e.client_ts >= '{start}' AND e.client_ts < '{end}'"
+            f"WHERE e.event_name = '{event_name}' AND e.client_ts >= '{start}' AND e.client_ts < '{end}'"
             + (" AND " + " AND ".join(wheres) if wheres else "")
         )
 
@@ -167,15 +169,17 @@ class QueryBuilder(EventsArtefacts):
 
         select_parts = self._get_select_parts(metric_config)
 
+        # ClickHouse: use toFloat64() instead of CAST(... AS FLOAT64)
         aggregation_expression = (
-            f"{aggregation.upper()}(CAST(p_val.value AS FLOAT64)) AS value"
+            f"{aggregation.upper()}(toFloat64(p_val.value)) AS value"
         )
         select_parts.append(aggregation_expression)
 
         select_expression = "SELECT " + ",\n    ".join(select_parts)
 
-        table_name = self._event_table_name(event_name)
-        from_expression = f"FROM `{table_name}` AS e"
+        # Unified table: query raw_events with event_name filter
+        table_name = self._raw_events_table_name()
+        from_expression = f"FROM {table_name} AS e"
 
         property_join_expression = self._props_join_expression(
             event_name, "p_val", property
@@ -184,7 +188,7 @@ class QueryBuilder(EventsArtefacts):
         wheres, where_joins = self._wheres_and_joins(event_name, filters)
 
         where_expression = (
-            f"WHERE e.client_ts >= '{start}' AND e.client_ts < '{end}'"
+            f"WHERE e.event_name = '{event_name}' AND e.client_ts >= '{start}' AND e.client_ts < '{end}'"
             + (" AND " + " AND ".join(wheres) if wheres else "")
         )
 
@@ -249,16 +253,18 @@ class QueryBuilder(EventsArtefacts):
         # Extract keys from group_by
         group_by_keys = [item["key"] for item in group_by]
 
+        # ClickHouse: use nullIf instead of SAFE_DIVIDE
         select_parts = [
             "num.period AS period",
-            "SAFE_DIVIDE(num.value, den.value) AS value",
+            "num.value / nullIf(den.value, 0) AS value",
         ] + [f"num.{c}" for c in group_by_keys]
         select_expression = "SELECT " + ",\n    ".join(select_parts)
 
         from_expression = "FROM num"
 
+        # ClickHouse: ifNull instead of IFNULL
         group_by_join_conditions = [
-            f"IFNULL(num.{c},'') = IFNULL(den.{c},'')" for c in group_by_keys
+            f"ifNull(num.{c},'') = ifNull(den.{c},'')" for c in group_by_keys
         ]
         join_conditions = ["num.period = den.period"] + group_by_join_conditions
         join_expression = "JOIN den ON " + " AND ".join(join_conditions)
@@ -273,7 +279,6 @@ class QueryBuilder(EventsArtefacts):
             with_expression=with_expression,
         )
 
-    # TODO: Review this query
     def _build_retention_query(self, metric_config: RetentionMetricConfig):
         granularity = metric_config["granularity"]
         time_range = metric_config["time_range"]
@@ -314,12 +319,13 @@ class QueryBuilder(EventsArtefacts):
 
         init_group_clause = ", ".join(["cohort_period", "user_id"] + group_by_keys)
 
+        # Unified table: use raw_events with event_name filter
         init_cte = (
             "initial_cohort AS (\n    SELECT\n        "
             + ",\n        ".join(init_select_cols)
-            + f"\n    FROM `{self._event_table_name(initial_event_name)}` AS e\n    "
+            + f"\n    FROM {self._raw_events_table_name()} AS e\n    "
             + "\n    ".join(g_joins + f_joins_init)
-            + f"\n    WHERE e.client_ts >= '{start}' AND e.client_ts < '{end}'{' AND ' + ' AND '.join(f_where_init) if f_where_init else ''}\n"
+            + f"\n    WHERE e.event_name = '{initial_event_name}' AND e.client_ts >= '{start}' AND e.client_ts < '{end}'{' AND ' + ' AND '.join(f_where_init) if f_where_init else ''}\n"
             + f"    GROUP BY {init_group_clause}\n)"
         )
 
@@ -331,12 +337,13 @@ class QueryBuilder(EventsArtefacts):
         f_where_ret, f_joins_ret = self._wheres_and_joins(
             return_event_name, return_filters
         )
+        # Unified table: use raw_events with event_name filter
         ret_cte = (
             "return_events AS (\n    SELECT\n        r.user_id AS user_id,\n        r.client_ts AS ret_ts\n    FROM "
-            + f"`{self._event_table_name(return_event_name)}`"
+            + f"{self._raw_events_table_name()}"
             + " AS r\n    "
             + "\n    ".join(f_joins_ret)
-            + f"\n    WHERE r.client_ts >= '{start}' AND r.client_ts < '{end}'{' AND ' + ' AND '.join(f_where_ret) if f_where_ret else ''}\n)"
+            + f"\n    WHERE r.event_name = '{return_event_name}' AND r.client_ts >= '{start}' AND r.client_ts < '{end}'{' AND ' + ' AND '.join(f_where_ret) if f_where_ret else ''}\n)"
         )
 
         # Final select
@@ -345,11 +352,13 @@ class QueryBuilder(EventsArtefacts):
         select_list = ", ".join(select_cols)
         group_clause = ", ".join(group_by_cols)
 
+        # ClickHouse: uniqExact instead of COUNT(DISTINCT), uniqExactIf for conditional,
+        # nullIf instead of SAFE_DIVIDE, ts + INTERVAL instead of TIMESTAMP_ADD
         final_sql = (
             "SELECT\n    "
             + select_list
-            + ",\n    COUNT(DISTINCT i.user_id) AS cohort_users,\n    COUNT(DISTINCT IF(r.ret_ts IS NOT NULL, i.user_id, NULL)) AS retained_users,\n    SAFE_DIVIDE(COUNT(DISTINCT IF(r.ret_ts IS NOT NULL, i.user_id, NULL)), COUNT(DISTINCT i.user_id)) AS value"
-            + f"\nFROM initial_cohort i\nLEFT JOIN return_events r\n  ON r.user_id = i.user_id\n  AND r.ret_ts > i.first_ts\n  AND r.ret_ts < TIMESTAMP_ADD(i.first_ts, {window_sql})\nGROUP BY {group_clause}\nORDER BY i.cohort_period"
+            + ",\n    uniqExact(i.user_id) AS cohort_users,\n    uniqExactIf(i.user_id, r.ret_ts IS NOT NULL) AS retained_users,\n    uniqExactIf(i.user_id, r.ret_ts IS NOT NULL) / nullIf(uniqExact(i.user_id), 0) AS value"
+            + f"\nFROM initial_cohort i\nLEFT JOIN return_events r\n  ON r.user_id = i.user_id\n  AND r.ret_ts > i.first_ts\n  AND r.ret_ts < i.first_ts + {window_sql}\nGROUP BY {group_clause}\nORDER BY i.cohort_period"
         )
 
         return f"WITH\n{init_cte},\n{ret_cte}\n{final_sql}"
@@ -427,11 +436,11 @@ class QueryBuilder(EventsArtefacts):
         return selects
 
     def _props_join_expression(self, event_name: str, alias: str, key: str):
-        """Return LEFT JOIN clause for a specific property key."""
+        """Return LEFT JOIN clause for a specific property key (unified event_props table)."""
 
         return (
-            f"LEFT JOIN `{self._event_props_table_name(event_name)}` AS {alias} "
-            f"ON e.event_id = {alias}.event_id AND {alias}.key = '{key}'"
+            f"LEFT JOIN {self._event_props_table_name()} AS {alias} "
+            f"ON e.event_id = {alias}.event_id AND {alias}.event_name = '{event_name}' AND {alias}.key = '{key}'"
         )
 
     def _user_profile_join_expression(self, alias: str, key: str) -> str:
@@ -441,24 +450,18 @@ class QueryBuilder(EventsArtefacts):
             f"LEFT JOIN ("
             f"  SELECT user_id, key, value, "
             f"  ROW_NUMBER() OVER (PARTITION BY user_id, key ORDER BY server_ts DESC) as rn "
-            f"  FROM `{self._user_profile_props_table_name()}` "
+            f"  FROM {self._user_profile_props_table_name()} "
             f"  WHERE key = '{key}'"
             f") AS {alias} "
             f"ON e.user_id = {alias}.user_id AND {alias}.key = '{key}' AND {alias}.rn = 1"
         )
 
     def _user_experience_join_expression(self, alias: str, key: str) -> str:
-        """Return LEFT JOIN clause for the latest user_experience values per user.
-
-        This returns a LEFT JOIN on a subquery that selects user_id, the requested
-        column (key) and a ROW_NUMBER() partitioned by user_id ordered by assigned_at DESC
-        so that rn = 1 yields the latest assignment per user.
-        """
-        # Note: Uses the user_experience table name from EventsArtefacts
+        """Return LEFT JOIN clause for the latest user_experience values per user."""
         return (
             f"LEFT JOIN ("
             f"  SELECT user_id, {key}, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY assigned_at DESC) as rn "
-            f"  FROM `{self._user_experience_table_name()}` "
+            f"  FROM {self._user_experience_table_name()} "
             f") AS {alias} "
             f"ON e.user_id = {alias}.user_id AND {alias}.rn = 1"
         )
@@ -560,7 +563,7 @@ class QueryBuilder(EventsArtefacts):
         return int(m.group(1)), m.group(2)
 
     def _interval_sql(self, interval_str: str) -> str:
-        """Convert a simple interval string (e.g. '7d', '24h', '1w') to BigQuery INTERVAL SQL."""
+        """Convert a simple interval string (e.g. '7d', '24h', '1w') to ClickHouse INTERVAL SQL."""
         qty, unit = self._parse_interval_string(interval_str)
 
         unit_sql = UNIT_SQL_MAP[unit]

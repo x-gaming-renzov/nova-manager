@@ -19,7 +19,7 @@ from nova_manager.components.metrics.query_builder import QueryBuilder
 from nova_manager.components.segments.crud import SegmentsCRUD
 from nova_manager.components.metrics.query_builder import KeySource
 from nova_manager.database.session import get_db
-from nova_manager.service.bigquery import BigQueryService
+from nova_manager.service.clickhouse_service import ClickHouseService
 from nova_manager.queues.controller import QueueController
 from nova_manager.components.auth.dependencies import (
     require_app_context,
@@ -103,8 +103,8 @@ async def compute_metric(
     query_builder = QueryBuilder(organisation_id, app_id)
     query = query_builder.build_query(type, config)
 
-    big_query_service = BigQueryService()
-    result = big_query_service.run_query(query)
+    clickhouse_service = ClickHouseService()
+    result = clickhouse_service.run_query(query)
 
     return result
 
