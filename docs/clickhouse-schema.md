@@ -232,14 +232,3 @@ Set via environment variables (defaults in parentheses):
 
 Client library: [`clickhouse-connect`](https://clickhouse.com/docs/en/integrations/python) with lazy-initialised connections.
 
----
-
-## Bootstrap
-
-To create databases and tables for all existing apps:
-
-```bash
-poetry run python scripts/bootstrap_clickhouse.py
-```
-
-This script is idempotent — it uses `CREATE DATABASE IF NOT EXISTS` and `CREATE TABLE IF NOT EXISTS`.
