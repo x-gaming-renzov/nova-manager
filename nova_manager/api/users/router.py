@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nova_manager.api.users.request_response import (
+    IdentifyUserRequest,
+    IdentifyUserResponse,
     UpdateUserProfile,
     UserCreate,
     UserResponse,
@@ -99,3 +101,63 @@ async def update_user_profile(
     )
 
     return {"nova_user_id": nova_user_id}
+
+
+@router.post("/identify/", response_model=IdentifyUserResponse)
+async def identify_user(
+    data: IdentifyUserRequest,
+    auth: SDKAuthContext = Depends(require_sdk_app_context),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Reconcile an anonymous user to an identified user"""
+
+    if data.anonymous_id == data.identified_id:
+        raise HTTPException(status_code=400, detail="anonymous_id and identified_id must be different")
+
+    organisation_id = auth.organisation_id
+    app_id = auth.app_id
+    users_crud = UsersAsyncCRUD(db)
+
+    anon_user = await users_crud.get_by_user_id(
+        user_id=data.anonymous_id, organisation_id=organisation_id, app_id=app_id
+    )
+    identified_user = await users_crud.get_by_user_id(
+        user_id=data.identified_id, organisation_id=organisation_id, app_id=app_id
+    )
+
+    merged = False
+
+    if not identified_user:
+        identified_user = await users_crud.create_user(
+            user_id=data.identified_id,
+            organisation_id=organisation_id,
+            app_id=app_id,
+            user_profile=data.user_profile or {},
+        )
+
+    if anon_user:
+        anon_profile = anon_user.user_profile or {}
+        await users_crud.merge_user_profiles(identified_user, anon_profile, data.user_profile)
+        await users_crud.reassign_user_experiences(anon_user.pid, identified_user.pid)
+        await users_crud.delete_user(anon_user)
+        await db.commit()
+        await db.refresh(identified_user)
+        merged = True
+
+    events_controller = EventsController(organisation_id, app_id)
+
+    QueueController().add_task(
+        events_controller.reconcile_user_in_clickhouse,
+        data.anonymous_id,
+        data.identified_id,
+    )
+
+    if merged:
+        QueueController().add_task(
+            events_controller.track_user_profile,
+            data.identified_id,
+            {},
+            identified_user.user_profile or {},
+        )
+
+    return {"nova_user_id": identified_user.pid, "merged": merged}
