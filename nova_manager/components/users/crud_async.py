@@ -1,8 +1,9 @@
 from uuid import UUID
 from typing import Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, update, and_
 from nova_manager.components.users.models import Users
+from nova_manager.components.user_experience.models import UserExperience
 from sqlalchemy.orm.attributes import flag_modified
 
 
@@ -90,3 +91,30 @@ class UsersAsyncCRUD:
         await self.db.refresh(user)
 
         return user
+
+    async def reassign_user_experiences(self, from_pid: UUID, to_pid: UUID) -> int:
+        stmt = (
+            update(UserExperience)
+            .where(UserExperience.user_id == from_pid)
+            .values(user_id=to_pid)
+        )
+        result = await self.db.execute(stmt)
+        await self.db.flush()
+        return result.rowcount
+
+    async def delete_user(self, user: Users) -> None:
+        await self.db.delete(user)
+        await self.db.flush()
+
+    async def merge_user_profiles(
+        self,
+        target: Users,
+        source_profile: dict | None,
+        additional_profile: dict | None,
+    ) -> Users:
+        merged = {**(source_profile or {}), **(target.user_profile or {}), **(additional_profile or {})}
+        target.user_profile = merged
+        flag_modified(target, "user_profile")
+        self.db.add(target)
+        await self.db.flush()
+        return target
