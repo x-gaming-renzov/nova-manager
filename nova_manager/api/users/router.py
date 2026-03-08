@@ -109,7 +109,22 @@ async def identify_user(
     auth: SDKAuthContext = Depends(require_sdk_app_context),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Reconcile an anonymous user to an identified user"""
+    """Reconcile an anonymous user to an identified user.
+
+    Performs the following steps:
+
+    1. If ``identified_id`` user does not exist, creates it.
+    2. If ``anonymous_id`` user exists in Postgres:
+       - Merges profiles (anon → identified → request ``user_profile``).
+       - Reassigns all experience assignments from anon to identified.
+       - Deletes the anonymous user record.
+       - Sets ``merged=True`` in the response.
+    3. Enqueues a ClickHouse job to update ``user_id`` across all event
+       tables (``ALTER TABLE ... UPDATE``), regardless of Postgres state.
+    4. If merged, enqueues a profile sync to ClickHouse.
+
+    Returns 400 if ``anonymous_id == identified_id``.
+    """
 
     if data.anonymous_id == data.identified_id:
         raise HTTPException(status_code=400, detail="anonymous_id and identified_id must be different")
