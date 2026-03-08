@@ -545,7 +545,8 @@ class QueryBuilder(EventsArtefacts):
             else:
                 raise ValueError(f"Unsupported time unit: {unit}")
 
-            return start_time.isoformat(), end_time.isoformat()
+            fmt = "%Y-%m-%d %H:%M:%S"
+            return start_time.strftime(fmt), end_time.strftime(fmt)
         else:
             if "start" not in time_range or "end" not in time_range:
                 raise ValueError("Invalid time range")
