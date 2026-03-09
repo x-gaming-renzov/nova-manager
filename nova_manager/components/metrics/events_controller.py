@@ -306,3 +306,18 @@ class EventsController(EventsArtefacts):
             ClickHouseService().insert_rows(
                 self._user_profile_props_table_name(), user_profile_rows
             )
+
+    def reconcile_user_in_clickhouse(self, anonymous_id: str, identified_id: str):
+        ch = ClickHouseService()
+        tables = [
+            self._raw_events_table_name(),
+            self._event_props_table_name(),
+            self._user_profile_props_table_name(),
+            self._user_experience_table_name(),
+        ]
+        for table in tables:
+            stmt = (
+                f"ALTER TABLE {table} UPDATE user_id = '{identified_id}' "
+                f"WHERE user_id = '{anonymous_id}'"
+            )
+            ch.execute(stmt)

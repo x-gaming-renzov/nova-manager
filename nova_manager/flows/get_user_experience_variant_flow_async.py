@@ -175,9 +175,10 @@ class GetUserExperienceVariantFlowAsync:
                 # Check if user matches personalisation rule
                 rule_config = personalisation.rule_config
 
-                # Check if user matches rule
+                # Merge payload into evaluation context; user_profile wins on conflicts
+                evaluation_context = {**(payload or {}), **(user.user_profile or {})}
                 if not self.rule_evaluator.evaluate_rule(
-                    rule_config, user.user_profile
+                    rule_config, evaluation_context
                 ):
                     continue
 

@@ -25,7 +25,15 @@ async def get_user_experience_variant(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Get variant for a single feature/object for a user.
+    Get the assigned variant for a single experience for a user.
+
+    The ``payload`` dict provides runtime context that is merged with the
+    user's stored ``user_profile`` when evaluating personalisation rules.
+    ``user_profile`` values take precedence over ``payload`` for overlapping
+    keys. The stored profile is never modified by ``payload``.
+
+    Personalisations that target transient payload fields should have
+    ``reassign=True`` so cached assignments are re-evaluated each request.
     """
     try:
         flow = GetUserExperienceVariantFlowAsync(db)
@@ -51,7 +59,14 @@ async def get_user_experiences(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Get variants for multiple specific features/objects for a user.
+    Get assigned variants for multiple experiences for a user.
+
+    The ``payload`` dict provides runtime context that is merged with the
+    user's stored ``user_profile`` when evaluating personalisation rules.
+    ``user_profile`` values take precedence over ``payload`` for overlapping
+    keys. The stored profile is never modified by ``payload``.
+
+    When ``experience_names`` is provided, only those experiences are evaluated.
     """
     try:
         flow = GetUserExperienceVariantFlowAsync(db)
@@ -79,7 +94,12 @@ async def get_all_user_experiences(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Get experiences for all active features/objects for a user.
+    Get assigned variants for all active experiences for a user.
+
+    The ``payload`` dict provides runtime context that is merged with the
+    user's stored ``user_profile`` when evaluating personalisation rules.
+    ``user_profile`` values take precedence over ``payload`` for overlapping
+    keys. The stored profile is never modified by ``payload``.
     """
     try:
         flow = GetUserExperienceVariantFlowAsync(db)
