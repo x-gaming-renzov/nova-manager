@@ -258,12 +258,12 @@ class EventsController(EventsArtefacts):
         user_experience_row = {
             "user_id": ch_user_id,
             "experience_id": str(user_experience.experience_id),
-            "personalisation_id": str(user_experience.personalisation_id),
-            "personalisation_name": user_experience.personalisation_name,
-            "experience_variant_id": str(user_experience.experience_variant_id),
+            "personalisation_id": str(user_experience.personalisation_id) if user_experience.personalisation_id else "",
+            "personalisation_name": user_experience.personalisation_name or "",
+            "experience_variant_id": str(user_experience.experience_variant_id) if user_experience.experience_variant_id else "",
             "features": json.dumps(user_experience.features),
-            "evaluation_reason": user_experience.evaluation_reason,
-            "assigned_at": user_experience.assigned_at.isoformat(),
+            "evaluation_reason": user_experience.evaluation_reason or "",
+            "assigned_at": user_experience.assigned_at.isoformat() if user_experience.assigned_at else datetime.now(timezone.utc).isoformat(),
         }
 
         ClickHouseService().insert_rows(
