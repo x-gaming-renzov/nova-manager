@@ -1,51 +1,150 @@
 #!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# Nova Manager — Deploy to GCP Cloud Run
+# Run as pranaypandit12@gmail.com
+# Prerequisites: scripts/gcp_admin_setup.sh and
+#                scripts/gcp_infra_setup.sh completed
+# ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
-### ── PROJECT SETTINGS ─────────────────────────────
-PROJECT_ID="xg-nova-infra"
+### ── PROJECT SETTINGS ────────────────────────────────────────
+PROJECT_ID="xgaminn"
 REGION="us-central1"
 REPO="app-images"
 IMAGE_NAME="nova-manager"
-TAG="prod"                       # change to v2, $(date +%Y%m%d%H%M) etc.
-### ────────────────────────────────────────────────
+TAG="$(date +%Y%m%d%H%M%S)"
+SA_EMAIL="nova-manager-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+CLOUD_SQL_INSTANCE="${PROJECT_ID}:${REGION}:nova-db"
+VPC_CONNECTOR="nova-connector"
+### ────────────────────────────────────────────────────────────
 
-# 1 Configure gcloud
+# Get data VM internal IP for ClickHouse env vars
+DATA_VM_IP=$(gcloud compute instances describe nova-data \
+  --zone="${REGION}-a" --project="$PROJECT_ID" \
+  --format='value(networkInterfaces[0].networkIP)')
+
+echo "=== Config ==="
+echo "  Project:    $PROJECT_ID"
+echo "  Region:     $REGION"
+echo "  Tag:        $TAG"
+echo "  Data VM IP: $DATA_VM_IP"
+echo ""
+
+# 1. Configure gcloud
+gcloud config set account pranaypandit12@gmail.com
 gcloud config set project "$PROJECT_ID"
 gcloud config set run/region "$REGION"
 
-# 2 Make sure the Artifact Registry repo exists
-gcloud artifacts repositories describe "$REPO" --location="$REGION" \
-  || gcloud artifacts repositories create "$REPO" \
-       --location="$REGION" --repository-format=docker
-
-# 3 Grant Cloud Build the writer role (idempotent)
-PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
-for SA in "$PROJECT_NUMBER@cloudbuild.gserviceaccount.com" \
-          "$PROJECT_NUMBER-compute@developer.gserviceaccount.com"; do
-  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:$SA" --role="roles/artifactregistry.writer" --quiet || true
-done
-
-# 4 Build & push
+# 2. Build & push
 FULL_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:${TAG}"
+echo "=== Building image: $FULL_IMAGE ==="
 gcloud builds submit --tag "$FULL_IMAGE"
 
-# # 5 Deploy
+# 3. Run Alembic migrations (Cloud Run Job)
+echo "=== Running database migrations ==="
+if gcloud run jobs describe nova-migrate --region="$REGION" --project="$PROJECT_ID" 2>/dev/null; then
+  gcloud run jobs update nova-migrate \
+    --image="$FULL_IMAGE" \
+    --region="$REGION" \
+    --project="$PROJECT_ID"
+  gcloud run jobs execute nova-migrate \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --wait
+else
+  gcloud run jobs create nova-migrate \
+    --image="$FULL_IMAGE" \
+    --command="alembic" \
+    --args="upgrade,head" \
+    --set-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
+    --vpc-connector="$VPC_CONNECTOR" \
+    --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+    --service-account="$SA_EMAIL" \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-retries=0 \
+    --execute-now --wait
+fi
+
+# 4. Run ClickHouse bootstrap (Cloud Run Job)
+echo "=== Bootstrapping ClickHouse ==="
+if gcloud run jobs describe nova-clickhouse-bootstrap --region="$REGION" --project="$PROJECT_ID" 2>/dev/null; then
+  gcloud run jobs update nova-clickhouse-bootstrap \
+    --image="$FULL_IMAGE" \
+    --region="$REGION" \
+    --project="$PROJECT_ID"
+  gcloud run jobs execute nova-clickhouse-bootstrap \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --wait
+else
+  gcloud run jobs create nova-clickhouse-bootstrap \
+    --image="$FULL_IMAGE" \
+    --command="python" \
+    --args="scripts/bootstrap_clickhouse.py" \
+    --set-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
+    --vpc-connector="$VPC_CONNECTOR" \
+    --set-secrets="DATABASE_URL=DATABASE_URL:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest" \
+    --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=/app" \
+    --service-account="$SA_EMAIL" \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-retries=0 \
+    --execute-now --wait
+fi
+
+# 5. Deploy API
+echo "=== Deploying API ==="
 gcloud run deploy "$IMAGE_NAME" \
   --image="$FULL_IMAGE" \
   --region="$REGION" \
   --platform=managed \
-  --allow-unauthenticated
+  --allow-unauthenticated \
+  --add-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
+  --vpc-connector="$VPC_CONNECTOR" \
+  --service-account="$SA_EMAIL" \
+  --set-secrets="DATABASE_URL=DATABASE_URL:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,BREVO_API_KEY=BREVO_API_KEY:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest" \
+  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default" \
+  --memory=512Mi \
+  --cpu=1 \
+  --min-instances=0 \
+  --max-instances=10 \
+  --concurrency=80 \
+  --port=8000 \
+  --project="$PROJECT_ID"
 
-#6 Deploy worker
+# 6. Deploy Worker
+echo "=== Deploying Worker ==="
 gcloud run deploy "nova-manager-worker" \
   --image="$FULL_IMAGE" \
   --region="$REGION" \
   --platform=managed \
-  --command="python,scripts/run_worker.py" \
   --no-allow-unauthenticated \
+  --command="python" \
+  --args="scripts/run_worker.py" \
+  --add-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
+  --vpc-connector="$VPC_CONNECTOR" \
+  --service-account="$SA_EMAIL" \
+  --set-secrets="DATABASE_URL=DATABASE_URL:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest" \
+  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=/app" \
   --cpu=1 \
+  --memory=512Mi \
   --no-cpu-throttling \
   --concurrency=1 \
   --min-instances=1 \
-  --max-instances=3
+  --max-instances=3 \
+  --port=8080 \
+  --project="$PROJECT_ID"
+
+# 7. Get URL and run smoke test
+API_URL=$(gcloud run services describe "$IMAGE_NAME" \
+  --region="$REGION" --project="$PROJECT_ID" \
+  --format='value(status.url)')
+
+echo ""
+echo "=== Deployment complete ==="
+echo "  API URL: $API_URL"
+echo "  Health:  $API_URL/health"
+echo ""
+echo "Run smoke tests:"
+echo "  python scripts/smoke_test.py --base-url $API_URL"
