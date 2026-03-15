@@ -9,6 +9,7 @@ from nova_manager.core.exceptions import (
     ValidationException,
     create_exception_response,
 )
+from nova_manager.core.config import ALLOWED_ORIGINS
 from nova_manager.core.log import configure_logging
 from nova_manager.middlewares.exceptions import ExceptionMiddleware
 
@@ -48,6 +49,11 @@ app.include_router(recommendations_router, prefix="/api/v1/recommendations")
 app.include_router(invitations_router, prefix="/api/v1/invitations")
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return create_exception_response(RequestValidationException(exc.errors()))
@@ -60,7 +66,7 @@ async def pydantic_validation_exception_handler(request: Request, exc: Validatio
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
