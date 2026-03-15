@@ -15,6 +15,7 @@ CLICKHOUSE_USER = getenv("CLICKHOUSE_USER") or "default"
 CLICKHOUSE_PASSWORD = getenv("CLICKHOUSE_PASSWORD") or ""
 BREVO_API_KEY = getenv("BREVO_API_KEY") or ""
 SDK_BACKEND_URL = getenv("SDK_BACKEND_URL") or ""
+ALLOWED_ORIGINS = [o.strip() for o in (getenv("ALLOWED_ORIGINS") or "*").split(",")]
 
 ORG_INVITE_TEMPLATE_ID = int(getenv("ORG_INVITE_TEMPLATE_ID") or "2")
 PASSWORD_RESET_TEMPLATE_ID = int(getenv("PASSWORD_RESET_TEMPLATE_ID") or "3")
