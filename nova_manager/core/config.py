@@ -17,6 +17,9 @@ BREVO_API_KEY = getenv("BREVO_API_KEY") or ""
 SDK_BACKEND_URL = getenv("SDK_BACKEND_URL") or ""
 ALLOWED_ORIGINS = [o.strip() for o in (getenv("ALLOWED_ORIGINS") or "*").split(",")]
 
+NOTICE_SERVICE_URL = getenv("NOTICE_SERVICE_URL") or "http://localhost:8001"
+NOTICE_SERVICE_SECRET = getenv("NOTICE_SERVICE_SECRET") or ""
+
 ORG_INVITE_TEMPLATE_ID = int(getenv("ORG_INVITE_TEMPLATE_ID") or "2")
 PASSWORD_RESET_TEMPLATE_ID = int(getenv("PASSWORD_RESET_TEMPLATE_ID") or "3")
 WELCOME_TEMPLATE_ID = int(getenv("WELCOME_TEMPLATE_ID") or "4")

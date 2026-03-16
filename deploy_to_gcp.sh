@@ -136,7 +136,26 @@ gcloud run deploy "nova-manager-worker" \
   --port=8080 \
   --project="$PROJECT_ID"
 
-# 7. Get URL and run smoke test
+# 7. Notice Service (runs on a dedicated GCE VM, NOT Cloud Run)
+# The notice service maintains persistent SSE connections, so it needs
+# a single long-lived process — not Cloud Run's ephemeral containers.
+#
+# To deploy manually:
+#   gcloud compute ssh nova-notice-vm -- \
+#     "cd /opt/nova-manager && git pull && \
+#      pip install -r requirements.txt && \
+#      sudo systemctl restart nova-notice-service"
+#
+# Required env vars on the VM:
+#   JWT_SECRET_KEY         (same as Cloud Run — needed for SDK key validation)
+#   NOTICE_SERVICE_SECRET  (shared secret, must match Cloud Run's NOTICE_SERVICE_SECRET)
+#   PORT                   (default: 8001)
+#
+# Required env vars on Cloud Run (steps 5 & 6):
+#   NOTICE_SERVICE_URL     (VM internal IP, e.g. http://10.128.0.2:8001)
+#   NOTICE_SERVICE_SECRET  (shared secret, must match the VM's value)
+
+# 8. Get URL and run smoke test
 API_URL=$(gcloud run services describe "$IMAGE_NAME" \
   --region="$REGION" --project="$PROJECT_ID" \
   --format='value(status.url)')
