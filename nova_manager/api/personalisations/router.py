@@ -28,8 +28,34 @@ from nova_manager.components.metrics.crud import (
     MetricsCRUD,
     PersonalisationMetricsCRUD,
 )
+import hashlib
+import logging
+import httpx
+from nova_manager.core.config import NOTICE_SERVICE_URL, NOTICE_SERVICE_SECRET
 
 router = APIRouter()
+_logger = logging.getLogger(__name__)
+
+
+async def _notify_notice_service(
+    org_id: str, app_id: str, experience_names: list[str], event_type: str
+):
+    """Fire-and-forget POST to the notice service. Never blocks CRUD."""
+    try:
+        signature = hashlib.sha256(f"{org_id}:{app_id}".encode()).hexdigest()
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{NOTICE_SERVICE_URL}/notify",
+                json={
+                    "type": event_type,
+                    "public_signature": signature,
+                    "experience_ids": experience_names,
+                },
+                headers={"X-Internal-Secret": NOTICE_SERVICE_SECRET},
+                timeout=5.0,
+            )
+    except Exception:
+        _logger.warning("Failed to notify notice service", exc_info=True)
 
 
 # Personalisation endpoints
@@ -229,6 +255,14 @@ async def create_personalisation(
                 "rule_config": seg.rule_config,
             })
 
+    # Notify notice service
+    await _notify_notice_service(
+        org_id=str(experience.organisation_id),
+        app_id=experience.app_id,
+        experience_names=[experience.name],
+        event_type="personalisation_created",
+    )
+
     # Return full personalisation with segments, variants, metrics
     return personalisations_crud.get_detailed_personalisation(personalisation.pid)
 
@@ -352,6 +386,16 @@ async def update_personalisation(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Notify notice service
+    exp = ExperiencesCRUD(db).get_by_pid(updated.experience_id)
+    if exp:
+        await _notify_notice_service(
+            org_id=str(auth.organisation_id),
+            app_id=auth.app_id,
+            experience_names=[exp.name],
+            event_type="personalisation_updated",
+        )
+
     return updated
 
 
@@ -410,6 +454,16 @@ async def disable_personalisation(
     if not updated:
         raise HTTPException(status_code=404, detail="Personalisation not found")
 
+    # Notify notice service
+    exp = ExperiencesCRUD(db).get_by_pid(personalisation.experience_id)
+    if exp:
+        await _notify_notice_service(
+            org_id=str(auth.organisation_id),
+            app_id=auth.app_id,
+            experience_names=[exp.name],
+            event_type="personalisation_disabled",
+        )
+
     return updated
 
 
@@ -440,5 +494,15 @@ async def enable_personalisation(
 
     if not updated:
         raise HTTPException(status_code=404, detail="Personalisation not found")
+
+    # Notify notice service
+    exp = ExperiencesCRUD(db).get_by_pid(personalisation.experience_id)
+    if exp:
+        await _notify_notice_service(
+            org_id=str(auth.organisation_id),
+            app_id=auth.app_id,
+            experience_names=[exp.name],
+            event_type="personalisation_enabled",
+        )
 
     return updated

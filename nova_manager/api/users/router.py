@@ -149,6 +149,11 @@ async def identify_user(
             app_id=app_id,
             user_profile=data.user_profile or {},
         )
+    else:
+        # Always apply latest profile even when identified user already exists
+        # (handles repeat sessions where anon_user may not exist due to race)
+        if data.user_profile:
+            await users_crud.update_user_profile(identified_user, data.user_profile)
 
     if anon_user:
         anon_profile = anon_user.user_profile or {}
