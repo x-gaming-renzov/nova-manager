@@ -130,6 +130,14 @@ class GetUserExperienceVariantFlowAsync:
                 experience_id
             )
 
+            # Build evaluation context once (payload + stored profile)
+            evaluation_context = {**(payload or {}), **(user.user_profile or {})}
+            logger.info(
+                f"[EXP-EVAL] Experience '{experience_name}': evaluating "
+                f"{len(personalisations)} personalisation(s) for user "
+                f"'{user.user_id}', context: {evaluation_context}"
+            )
+
             # If personalisations, evaluate each personalisation
             for personalisation in personalisations:
                 # If a personalisation is already assigned in cache
@@ -146,11 +154,19 @@ class GetUserExperienceVariantFlowAsync:
                     if (
                         assigned_at < last_updated_at and not personalisation.reassign
                     ) and not personalisation.reassign:
+                        logger.info(
+                            f"[EXP-EVAL] Personalisation '{personalisation.name}' — "
+                            f"using cached assignment"
+                        )
                         results[experience_name] = existing_user_experience
                         continue
 
                 # If personalisation is not active, skip it
                 if not personalisation.is_active:
+                    logger.info(
+                        f"[EXP-EVAL] Personalisation '{personalisation.name}' — "
+                        f"skipped: inactive"
+                    )
                     continue
 
                 rollout_percentage = personalisation.rollout_percentage
@@ -161,6 +177,10 @@ class GetUserExperienceVariantFlowAsync:
                 if not self.rule_evaluator.evaluate_target_percentage(
                     str(user.pid), rollout_percentage, context_id
                 ):
+                    logger.info(
+                        f"[EXP-EVAL] Personalisation '{personalisation.name}' — "
+                        f"skipped: rollout_percentage ({rollout_percentage}%)"
+                    )
                     continue
 
                 # Enforce segment membership if any segment rules are configured
@@ -170,17 +190,29 @@ class GetUserExperienceVariantFlowAsync:
                             seg.rule_config, payload
                         ) for seg in personalisation.segment_rules
                     ):
+                        logger.info(
+                            f"[EXP-EVAL] Personalisation '{personalisation.name}' — "
+                            f"skipped: segment rules"
+                        )
                         continue
 
                 # Check if user matches personalisation rule
                 rule_config = personalisation.rule_config
 
                 # Merge payload into evaluation context; user_profile wins on conflicts
-                evaluation_context = {**(payload or {}), **(user.user_profile or {})}
                 if not self.rule_evaluator.evaluate_rule(
                     rule_config, evaluation_context
                 ):
+                    logger.info(
+                        f"[EXP-EVAL] Personalisation '{personalisation.name}' — "
+                        f"skipped: rule_config {rule_config} did not match context"
+                    )
                     continue
+
+                logger.info(
+                    f"[EXP-EVAL] Personalisation '{personalisation.name}' — "
+                    f"MATCHED rule_config {rule_config}"
+                )
 
                 experience_variants = personalisation.experience_variants
 
@@ -270,6 +302,10 @@ class GetUserExperienceVariantFlowAsync:
 
             # If no experience variant assignment, use default features. Should never happen.
             if not experience_variant_assignment:
+                logger.warning(
+                    f"[EXP-EVAL] Experience '{experience_name}': NO personalisation "
+                    f"matched for user '{user.user_id}' — falling back to defaults"
+                )
                 features = self._get_experience_default_features(experience)
 
                 experience_variant_assignment = UserExperienceAssignment(

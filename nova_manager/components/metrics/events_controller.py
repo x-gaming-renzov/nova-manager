@@ -259,7 +259,7 @@ class EventsController(EventsArtefacts):
             "user_id": ch_user_id,
             "experience_id": str(user_experience.experience_id),
             "personalisation_id": str(user_experience.personalisation_id) if user_experience.personalisation_id else "",
-            "personalisation_name": user_experience.personalisation_name or "",
+            "personalisation_name": user_experience.personalisation_name or "default",
             "experience_variant_id": str(user_experience.experience_variant_id) if user_experience.experience_variant_id else "",
             "features": json.dumps(user_experience.features),
             "evaluation_reason": user_experience.evaluation_reason or "",
@@ -308,6 +308,12 @@ class EventsController(EventsArtefacts):
             )
 
     def reconcile_user_in_clickhouse(self, anonymous_id: str, identified_id: str):
+        """Re-key anon rows → identified user in ClickHouse.
+
+        user_id is part of the ORDER BY key in MergeTree tables, so it
+        cannot be updated in-place.  Instead we INSERT … SELECT with the
+        new user_id and then DELETE the old rows.
+        """
         ch = ClickHouseService()
         tables = [
             self._raw_events_table_name(),
@@ -316,8 +322,20 @@ class EventsController(EventsArtefacts):
             self._user_experience_table_name(),
         ]
         for table in tables:
-            stmt = (
-                f"ALTER TABLE {table} UPDATE user_id = '{identified_id}' "
-                f"WHERE user_id = '{anonymous_id}'"
-            )
-            ch.execute(stmt)
+            try:
+                # 1. Copy rows with the new user_id
+                insert_stmt = (
+                    f"INSERT INTO {table} "
+                    f"SELECT '{identified_id}' AS user_id, * EXCEPT(user_id) "
+                    f"FROM {table} WHERE user_id = '{anonymous_id}'"
+                )
+                ch.execute(insert_stmt)
+
+                # 2. Remove the old anon rows
+                delete_stmt = (
+                    f"ALTER TABLE {table} DELETE "
+                    f"WHERE user_id = '{anonymous_id}'"
+                )
+                ch.execute(delete_stmt)
+            except Exception as e:
+                logger.error(f"reconcile_user_in_clickhouse failed for {table}: {e}")

@@ -28,8 +28,28 @@ from nova_manager.components.metrics.crud import (
     MetricsCRUD,
     PersonalisationMetricsCRUD,
 )
+from nova_manager.api.sse.hub import sse_hub
 
 router = APIRouter()
+
+
+def _notify_experience_change(
+    db: Session,
+    experience_id,
+    organisation_id: str,
+    app_id: str,
+    reason: str,
+):
+    """Look up experience name and notify SSE subscribers."""
+    experiences_crud = ExperiencesCRUD(db)
+    experience = experiences_crud.get_by_pid(experience_id)
+    if experience:
+        sse_hub.notify(
+            organisation_id=organisation_id,
+            app_id=app_id,
+            experience_name=experience.name,
+            reason=reason,
+        )
 
 
 # Personalisation endpoints
@@ -229,6 +249,14 @@ async def create_personalisation(
                 "rule_config": seg.rule_config,
             })
 
+    # Notify SSE subscribers
+    sse_hub.notify(
+        organisation_id=str(experience.organisation_id),
+        app_id=experience.app_id,
+        experience_name=experience.name,
+        reason="personalisation_created",
+    )
+
     # Return full personalisation with segments, variants, metrics
     return personalisations_crud.get_detailed_personalisation(personalisation.pid)
 
@@ -352,6 +380,13 @@ async def update_personalisation(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Notify SSE subscribers
+    _notify_experience_change(
+        db, updated.experience_id,
+        str(auth.organisation_id), auth.app_id,
+        "personalisation_updated",
+    )
+
     return updated
 
 
@@ -410,6 +445,13 @@ async def disable_personalisation(
     if not updated:
         raise HTTPException(status_code=404, detail="Personalisation not found")
 
+    # Notify SSE subscribers
+    _notify_experience_change(
+        db, personalisation.experience_id,
+        str(auth.organisation_id), auth.app_id,
+        "personalisation_disabled",
+    )
+
     return updated
 
 
@@ -440,5 +482,12 @@ async def enable_personalisation(
 
     if not updated:
         raise HTTPException(status_code=404, detail="Personalisation not found")
+
+    # Notify SSE subscribers
+    _notify_experience_change(
+        db, personalisation.experience_id,
+        str(auth.organisation_id), auth.app_id,
+        "personalisation_enabled",
+    )
 
     return updated
