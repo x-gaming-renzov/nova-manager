@@ -304,3 +304,21 @@ async def get_feature_flag(
         raise HTTPException(status_code=404, detail="Feature flag not found")
 
     return feature_flag
+
+
+@router.patch("/{flag_pid}/toggle/", response_model=FeatureFlagListItem)
+async def toggle_feature_flag(
+    flag_pid: UUID,
+    auth: AuthContext = Depends(require_app_context),
+    db: Session = Depends(get_db),
+):
+    """Toggle the is_active status of a feature flag."""
+    crud = FeatureFlagsCRUD(db)
+    flag = crud.get_by_pid(flag_pid)
+    if not flag:
+        raise HTTPException(status_code=404, detail="Feature flag not found")
+    if str(flag.organisation_id) != str(auth.organisation_id):
+        raise HTTPException(status_code=403, detail="Not in your organization")
+    if flag.app_id != auth.app_id:
+        raise HTTPException(status_code=403, detail="Not in your app")
+    return crud.toggle_active(flag_pid)
