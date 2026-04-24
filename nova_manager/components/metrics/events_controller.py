@@ -314,7 +314,7 @@ class EventsController(EventsArtefacts):
         timestamp: datetime | None = None,
     ):
         if not timestamp:
-            timestamp = datetime.now()
+            timestamp = datetime.now(timezone.utc)
 
         if not event_data:
             event_data = {}
