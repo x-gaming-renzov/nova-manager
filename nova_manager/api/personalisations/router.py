@@ -1,5 +1,6 @@
 from uuid import UUID
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -150,28 +151,37 @@ async def create_personalisation(
             detail=f"Experience Variant percentages must sum to 100%, got {total_percentage}%",
         )
 
-    max_priority_personalisation = (
-        personalisations_crud.get_experience_max_priority_personalisation(
-            experience_id=experience_id
-        )
-    )
-
-    if max_priority_personalisation:
-        next_priority = max_priority_personalisation.priority + 1
+    if personalisation_data.priority is not None:
+        next_priority = personalisation_data.priority
     else:
-        next_priority = 1
+        max_priority_personalisation = (
+            personalisations_crud.get_experience_max_priority_personalisation(
+                experience_id=experience_id
+            )
+        )
+        next_priority = (
+            max_priority_personalisation.priority + 1
+            if max_priority_personalisation
+            else 1
+        )
 
     # Create personalisation with variants
-    personalisation = personalisations_crud.create_personalisation(
-        experience_id=experience_id,
-        organisation_id=experience.organisation_id,
-        app_id=experience.app_id,
-        name=personalisation_data.name,
-        description=personalisation_data.description,
-        priority=next_priority,
-        rule_config=personalisation_data.rule_config,
-        rollout_percentage=personalisation_data.rollout_percentage,
-    )
+    try:
+        personalisation = personalisations_crud.create_personalisation(
+            experience_id=experience_id,
+            organisation_id=experience.organisation_id,
+            app_id=experience.app_id,
+            name=personalisation_data.name,
+            description=personalisation_data.description,
+            priority=next_priority,
+            rule_config=personalisation_data.rule_config,
+            rollout_percentage=personalisation_data.rollout_percentage,
+        )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Priority {next_priority} already exists for this experience",
+        )
 
     for i in experience_variants:
         target_percentage = i.target_percentage
