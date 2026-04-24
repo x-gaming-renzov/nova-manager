@@ -272,7 +272,6 @@ class QueryBuilder(EventsArtefacts):
             with_expression=with_expression,
         )
 
-    # TODO: Review this query
     def _build_retention_query(self, metric_config: RetentionMetricConfig):
         granularity = metric_config["granularity"]
         time_range = metric_config["time_range"]
@@ -344,11 +343,16 @@ class QueryBuilder(EventsArtefacts):
         select_list = ", ".join(select_cols)
         group_clause = ", ".join(group_by_cols)
 
+        retained_expr = (
+            f"COUNT(DISTINCT IF(r.ret_ts > i.first_ts AND r.ret_ts < i.first_ts + {window_sql}, i.user_id, NULL))"
+        )
+
         final_sql = (
             "SELECT\n    "
             + select_list
-            + ",\n    COUNT(DISTINCT i.user_id) AS cohort_users,\n    COUNT(DISTINCT IF(r.ret_ts IS NOT NULL, i.user_id, NULL)) AS retained_users,\n    SAFE_DIVIDE(COUNT(DISTINCT IF(r.ret_ts IS NOT NULL, i.user_id, NULL)), COUNT(DISTINCT i.user_id)) AS value"
-            + f"\nFROM initial_cohort i\nLEFT JOIN return_events r\n  ON r.user_id = i.user_id\n  AND r.ret_ts > i.first_ts\n  AND r.ret_ts < TIMESTAMP_ADD(i.first_ts, {window_sql})\nGROUP BY {group_clause}\nORDER BY i.cohort_period"
+            + f",\n    COUNT(DISTINCT i.user_id) AS cohort_users,\n    {retained_expr} AS retained_users,"
+            + f"\n    IF(COUNT(DISTINCT i.user_id) = 0, 0, {retained_expr} / COUNT(DISTINCT i.user_id)) AS value"
+            + f"\nFROM initial_cohort i\nLEFT JOIN return_events r\n  ON r.user_id = i.user_id\nGROUP BY {group_clause}\nORDER BY i.cohort_period"
         )
 
         return f"WITH\n{init_cte},\n{ret_cte}\n{final_sql}"
@@ -520,7 +524,7 @@ class QueryBuilder(EventsArtefacts):
         return int(m.group(1)), m.group(2)
 
     def _interval_sql(self, interval_str: str) -> str:
-        """Convert a simple interval string (e.g. '7d', '24h', '1w') to BigQuery INTERVAL SQL."""
+        """Convert a simple interval string (e.g. '7d', '24h', '1w') to INTERVAL SQL."""
         qty, unit = self._parse_interval_string(interval_str)
 
         unit_sql = UNIT_SQL_MAP[unit]
