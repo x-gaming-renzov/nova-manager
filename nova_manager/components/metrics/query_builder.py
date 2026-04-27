@@ -352,13 +352,16 @@ class QueryBuilder(EventsArtefacts):
         select_list = ", ".join(select_cols)
         group_clause = ", ".join(group_by_cols)
 
-        # ClickHouse: uniqExact instead of COUNT(DISTINCT), uniqExactIf for conditional,
-        # nullIf instead of SAFE_DIVIDE, ts + INTERVAL instead of TIMESTAMP_ADD
+        retained_expr = (
+            f"COUNT(DISTINCT IF(r.ret_ts > i.first_ts AND r.ret_ts < i.first_ts + {window_sql}, i.user_id, NULL))"
+        )
+
         final_sql = (
             "SELECT\n    "
             + select_list
-            + ",\n    uniqExact(i.user_id) AS cohort_users,\n    uniqExactIf(i.user_id, r.ret_ts IS NOT NULL) AS retained_users,\n    uniqExactIf(i.user_id, r.ret_ts IS NOT NULL) / nullIf(uniqExact(i.user_id), 0) AS value"
-            + f"\nFROM initial_cohort i\nLEFT JOIN return_events r\n  ON r.user_id = i.user_id\n  AND r.ret_ts > i.first_ts\n  AND r.ret_ts < i.first_ts + {window_sql}\nGROUP BY {group_clause}\nORDER BY i.cohort_period"
+            + f",\n    COUNT(DISTINCT i.user_id) AS cohort_users,\n    {retained_expr} AS retained_users,"
+            + f"\n    IF(COUNT(DISTINCT i.user_id) = 0, 0, {retained_expr} / COUNT(DISTINCT i.user_id)) AS value"
+            + f"\nFROM initial_cohort i\nLEFT JOIN return_events r\n  ON r.user_id = i.user_id\nGROUP BY {group_clause}\nORDER BY i.cohort_period"
         )
 
         return f"WITH\n{init_cte},\n{ret_cte}\n{final_sql}"

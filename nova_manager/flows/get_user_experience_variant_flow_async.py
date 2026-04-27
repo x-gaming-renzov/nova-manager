@@ -150,16 +150,9 @@ class GetUserExperienceVariantFlowAsync:
                     assigned_at = existing_user_experience.assigned_at
                     last_updated_at = personalisation.last_updated_at
 
-                    # If personalisation was updated after the existing assignment and reassign is false, use it
-                    if (
-                        assigned_at < last_updated_at and not personalisation.reassign
-                    ) and not personalisation.reassign:
-                        logger.info(
-                            f"[EXP-EVAL] Personalisation '{personalisation.name}' — "
-                            f"using cached assignment"
-                        )
-                        results[experience_name] = existing_user_experience
-                        continue
+                    if assigned_at >= last_updated_at or not personalisation.reassign:
+                        experience_variant_assignment = existing_user_experience
+                        break
 
                 # If personalisation is not active, skip it
                 if not personalisation.is_active:

@@ -23,7 +23,6 @@ class AuthUserRegister(BaseModel):
     @classmethod
     def validate_company(cls, v, info):
         """Validate company field based on whether it's an invite signup"""
-        print(f"Company: {info}, Invite token: {info.data.get('invite_token')}")
         # If there's an invite_token, company should be null
         if info.data.get("invite_token"):
             return None  # Force null for invited users
