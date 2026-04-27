@@ -124,3 +124,12 @@ Request
 ```
 
 Response: updated metric object.
+
+### Retention metrics
+
+Retention queries use ClickHouse-compatible SQL. The retention calculation:
+- Uses `INTERVAL` arithmetic (e.g., `i.first_ts + INTERVAL 30 DAY`) for time-window filtering
+- Applies time-window conditions inside `IF()` aggregation expressions rather than in JOIN clauses (required for ClickHouse v24.8+ compatibility)
+- Guards against divide-by-zero with `IF(count = 0, 0, retained / total)` instead of `SAFE_DIVIDE`
+
+**Note:** Retention values reflect users who performed the return event within the retention window. Users with no qualifying return event are correctly counted as not retained.

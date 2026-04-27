@@ -54,6 +54,9 @@ Notes
 
 - Exactly one default variant allowed across variants; percentages must sum to 100.
 - Experience, metrics must belong to the same organisation/app as the token.
+- `priority` is optional. When provided, the personalisation is created with that exact priority. When omitted (`null`), priority is auto-assigned as `max_existing_priority + 1`.
+- Returns **409 Conflict** if the supplied `priority` already exists for the same experience. Callers should handle this status code.
+- Priority determines evaluation order: personalisations are evaluated in descending priority (highest first), and evaluation is first-match-wins. Choose priorities carefully to avoid unintentional shadowing.
 
 #### GET /api/v1/personalisations/
 
