@@ -29,3 +29,4 @@ Notes
 
 - Events are queued asynchronously and processed server-side.
 - See Metrics for event schema discovery and metric computations.
+- When `timestamp` is omitted, the server assigns the current time in **UTC**. All server-generated timestamps are UTC — ensure downstream queries and dashboards account for this.

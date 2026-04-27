@@ -80,3 +80,13 @@ Response: map keyed by experience name.
 Notes
 
 - If the user doesn’t exist, a 404 is returned. Create or update the user first via Users API.
+
+### Evaluation behaviour
+
+**Rule evaluation and missing fields:** When a user’s payload is missing a field referenced in a rule condition, the condition evaluates to `false` (not an error). This applies to all comparison operators (`greater_than`, `less_than`, etc.) and string operators (`contains`, `starts_with`, `ends_with`). Ensure the payload includes all fields your rules depend on.
+
+**Caching:** Once a user is assigned a variant, the assignment is cached. Cached results are reused when:
+- The assignment is still fresh (assigned after the personalisation was last updated), OR
+- The personalisation has `reassign` set to `false`
+
+Re-evaluation only occurs when the personalisation has been updated since the assignment AND `reassign` is `true`.
