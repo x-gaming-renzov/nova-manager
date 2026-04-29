@@ -349,8 +349,8 @@ class QueryBuilder(EventsArtefacts):
         # Filtered returns CTE: INNER JOIN on equality only, time-window
         # filter in WHERE to avoid ClickHouse's restriction on non-equality
         # cross-table conditions in JOIN ON clauses.
-        fr_select_cols = ["i.cohort_period", "r.user_id", "r.ret_ts"] + [
-            f"i.{c}" for c in group_by_keys
+        fr_select_cols = ["i.cohort_period AS cohort_period", "r.user_id AS user_id", "r.ret_ts AS ret_ts"] + [
+            f"i.{c} AS {c}" for c in group_by_keys
         ]
         fr_join_cols = ["fr.user_id = i.user_id", "fr.cohort_period = i.cohort_period"] + [
             f"fr.{c} = i.{c}" for c in group_by_keys
