@@ -294,3 +294,30 @@ def run(base: str, state: dict):
         total_retained = sum(row.get("retained_users", 0) for row in data)
         check("1h window: zero retained", total_retained == 0,
               f"got {total_retained}")
+
+    # ── Issue doc reproducers (real event pairs, custom windows) ──
+    step(30, "Retention — Issue doc reproducers (existing data)")
+
+    ISSUE_TR = {"start": "2026-03-18 12:17:18", "end": "2026-04-17 12:17:18"}
+    reproducers = [
+        ("login→login 1d daily", "auth.login_success", "auth.login_success", "1d", "daily"),
+        ("login→tournament 7d", "auth.login_success", "tournament.viewed", "7d", "daily"),
+        ("signup→created 14d weekly", "organizer.signup_started", "tournament.created", "14d", "weekly"),
+        ("custom 3d", "auth.login_success", "role.switched", "3d", "daily"),
+        ("custom 60d", "auth.login_success", "role.switched", "60d", "daily"),
+        ("custom 12h", "auth.login_success", "role.switched", "12h", "daily"),
+        ("custom 2w", "auth.login_success", "role.switched", "2w", "daily"),
+    ]
+    for label, init_evt, ret_evt, window, gran in reproducers:
+        r = requests.post(f"{api}/metrics/compute/", headers=headers, json={
+            "type": "retention",
+            "config": {
+                "time_range": ISSUE_TR, "granularity": gran,
+                "group_by": [], "filters": {},
+                "initial_event": {"event_name": init_evt},
+                "return_event": {"event_name": ret_evt},
+                "retention_window": window,
+            },
+        })
+        check(f"Retention {label} returns 200", r.status_code == 200,
+              f"got {r.status_code}")
