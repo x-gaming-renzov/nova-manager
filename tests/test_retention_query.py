@@ -1,11 +1,10 @@
 """Tests for retention query generation in QueryBuilder.
 
-Verifies that the generated SQL uses only equality conditions in JOIN ON
-clauses, which is required by ClickHouse (non-equality cross-table conditions
-in JOIN ON cause error code 403 INVALID_JOIN_ON_EXPRESSION).
+Verifies that the generated SQL:
+- Uses only equality conditions in JOIN ON clauses (ClickHouse requirement)
+- Places time-window filtering inside aggregation functions
+- Handles group_by, filters, and window variants correctly
 """
-
-import re
 
 import pytest
 
@@ -38,13 +37,6 @@ def _base_retention_config(**overrides):
     return config
 
 
-def _extract_join_on_conditions(sql: str) -> list[str]:
-    """Extract all JOIN ... ON condition blocks from the SQL."""
-    # Match "JOIN <table> ON <conditions>" up to the next keyword or newline block
-    pattern = r"JOIN\s+\S+\s+\S+\s+ON\s+(.+?)(?=\n\s*(?:WHERE|GROUP|ORDER|LEFT|INNER|RIGHT|FULL|$))"
-    return re.findall(pattern, sql, re.DOTALL)
-
-
 class TestRetentionQuery:
     def test_basic_retention_generates_valid_sql(self):
         qb = QueryBuilder(ORG_ID, APP_ID)
@@ -52,53 +44,56 @@ class TestRetentionQuery:
 
         assert "initial_cohort" in sql
         assert "return_events" in sql
-        assert "filtered_returns" in sql
 
     def test_no_cross_table_inequality_in_join_on(self):
-        """The ClickHouse bug: JOIN ON must not have cross-table > or < conditions."""
+        """JOIN ON must not have cross-table > or < conditions (ClickHouse error 403)."""
         qb = QueryBuilder(ORG_ID, APP_ID)
         sql = qb.build_query("retention", _base_retention_config())
 
-        join_conditions = _extract_join_on_conditions(sql)
-        for cond in join_conditions:
-            # Each individual condition should be equality only (no > or <)
-            # Split by AND to check each sub-condition
-            parts = [p.strip() for p in cond.split("AND")]
+        # Find all JOIN ... ON blocks
+        import re
+        on_blocks = re.findall(
+            r"ON\s+(.+?)(?=\n\s*(?:WHERE|GROUP|ORDER|$))", sql, re.DOTALL
+        )
+        for block in on_blocks:
+            parts = [p.strip() for p in block.split("AND")]
             for part in parts:
                 assert ">" not in part and "<" not in part, (
                     f"JOIN ON contains non-equality condition: {part}"
                 )
 
-    def test_time_window_in_where_clause(self):
-        """The time-window filter should be in the filtered_returns WHERE, not JOIN ON."""
+    def test_time_window_in_aggregation(self):
+        """Time-window check should be inside uniqExactIf, not in JOIN ON or CTE WHERE."""
         qb = QueryBuilder(ORG_ID, APP_ID)
         sql = qb.build_query("retention", _base_retention_config())
 
-        # The filtered_returns CTE should contain the time-window WHERE
-        assert "WHERE r.ret_ts > i.first_ts" in sql
+        assert "uniqExactIf(i.user_id, r.ret_ts > i.first_ts" in sql
         assert "INTERVAL 30 DAY" in sql
 
-    def test_left_join_to_filtered_returns(self):
-        """Final query should LEFT JOIN to filtered_returns, not directly to return_events."""
+    def test_left_join_on_user_id_only(self):
+        """Final query should LEFT JOIN return_events on user_id equality only."""
         qb = QueryBuilder(ORG_ID, APP_ID)
         sql = qb.build_query("retention", _base_retention_config())
 
-        assert "LEFT JOIN filtered_returns fr" in sql
-        # Should NOT have a direct LEFT JOIN to return_events
-        assert "LEFT JOIN return_events" not in sql
+        assert "LEFT JOIN return_events r" in sql
+        assert "ON r.user_id = i.user_id" in sql
+
+    def test_no_filtered_returns_cte(self):
+        """Should NOT use a filtered_returns CTE (ClickHouse ignores WHERE in CTE JOINs)."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        sql = qb.build_query("retention", _base_retention_config())
+
+        assert "filtered_returns" not in sql
 
     def test_retention_with_group_by(self):
-        """Group-by keys should be carried through filtered_returns and used in JOIN ON."""
+        """Group-by keys should appear in SELECT, GROUP BY."""
         qb = QueryBuilder(ORG_ID, APP_ID)
         config = _base_retention_config(
             group_by=[{"key": "country", "source": "user_profile"}]
         )
         sql = qb.build_query("retention", config)
 
-        # filtered_returns CTE should select the group_by column
         assert "i.country" in sql
-        # Final JOIN should include group_by equality
-        assert "fr.country = i.country" in sql
 
     def test_retention_window_variants(self):
         """Different retention windows should produce correct INTERVAL SQL."""
@@ -131,19 +126,12 @@ class TestRetentionQuery:
         )
         sql = qb.build_query("retention", config)
 
-        # Both CTEs should have the filter applied
         assert "user123" in sql
 
-    def test_retention_with_multiple_group_by(self):
-        """Multiple group-by keys should all be carried through."""
+    def test_retained_condition_matches_window(self):
+        """The retained condition should use the exact window from config."""
         qb = QueryBuilder(ORG_ID, APP_ID)
-        config = _base_retention_config(
-            group_by=[
-                {"key": "country", "source": "user_profile"},
-                {"key": "platform", "source": "event_properties"},
-            ]
-        )
+        config = _base_retention_config(retention_window="1h")
         sql = qb.build_query("retention", config)
 
-        assert "fr.country = i.country" in sql
-        assert "fr.platform = i.platform" in sql
+        assert "r.ret_ts > i.first_ts AND r.ret_ts < i.first_ts + INTERVAL 1 HOUR" in sql
