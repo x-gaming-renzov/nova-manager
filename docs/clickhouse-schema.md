@@ -20,7 +20,7 @@ Databases are created on-demand when an app first tracks events, or in bulk via 
 
 ## Tables
 
-All four tables use the **MergeTree** engine with monthly partitioning for efficient time-range pruning.
+Four tables use the **MergeTree** engine and one uses **ReplacingMergeTree**, all with monthly partitioning for efficient time-range pruning.
 
 ### 1. `raw_events` — Event log
 
@@ -153,6 +153,48 @@ ORDER BY (user_id, experience_id, assigned_at)
 
 ---
 
+### 5. `business_metrics` — Operational/business data
+
+Stores financial and operational data that is not tied to user events: marketing spend, TO incentive payouts, sponsorship revenue, CPI costs, etc. This data is ingested via `POST /api/v1/metrics/business-data/` and queried by the `operational` metric type.
+
+Uses **ReplacingMergeTree** instead of MergeTree. This means re-ingesting the same metric_name + dimension + period_start replaces the previous value rather than creating a duplicate. Queries must use `FINAL` to read deduplicated data.
+
+```sql
+CREATE TABLE business_metrics (
+    metric_name  String,
+    dimension    String,
+    value        Float64,
+    currency     String DEFAULT '',
+    period_start DateTime64(3),
+    created_at   DateTime64(3)
+) ENGINE = ReplacingMergeTree(created_at)
+PARTITION BY toYYYYMM(period_start)
+ORDER BY (metric_name, dimension, period_start)
+```
+
+| Column | Purpose |
+|---|---|
+| `metric_name` | What is being measured (e.g. `marketing_spend`, `total_revenue`, `to_incentive_payout`) |
+| `dimension` | Breakdown key (e.g. `google_ads`, `facebook`, `tier_1`). Empty string if dimensionless. |
+| `value` | Numeric value (Float64). Must be finite. |
+| `currency` | Optional currency code (e.g. `USD`). |
+| `period_start` | Start of the period this value covers. |
+| `created_at` | Insertion timestamp. Used by ReplacingMergeTree to keep the latest row on dedup. |
+
+**ORDER BY** `(metric_name, dimension, period_start)` — this is also the dedup key. Re-inserting the same combination replaces the old row.
+
+**Query pattern (with FINAL for dedup):**
+```sql
+SELECT toStartOfMonth(period_start) AS period, SUM(value) AS value
+FROM business_metrics FINAL
+WHERE metric_name = 'marketing_spend'
+  AND period_start >= '2026-07-01' AND period_start < '2026-10-01'
+GROUP BY period
+ORDER BY period
+```
+
+---
+
 ## Data Flow
 
 ### Event ingestion
@@ -183,11 +225,19 @@ evaluate_experience() → user_experience (one row per assignment)
 
 Recorded whenever a user is assigned (or re-assigned) to an experience variant.
 
+### Business data ingestion
+
+```
+Dashboard → POST /business-data/ → business_metrics (one row per data point)
+```
+
+Operational data (spend, revenue, payouts) is inserted directly without going through the async job queue. ReplacingMergeTree handles upserts.
+
 ---
 
 ## Query Patterns & Metrics
 
-The `QueryBuilder` generates ClickHouse SQL for four metric types:
+The `QueryBuilder` generates ClickHouse SQL for six metric types:
 
 | Metric | Description | Key ClickHouse features used |
 |---|---|---|
@@ -195,6 +245,8 @@ The `QueryBuilder` generates ClickHouse SQL for four metric types:
 | **Aggregation** | SUM/AVG/MIN/MAX on a property | `toFloat64()` cast on `event_props.value` |
 | **Ratio** | Numerator count / denominator count | `nullIf(den, 0)` for safe division, CTEs |
 | **Retention** | Cohort retention over a time window | `uniqExactIf()`, `INTERVAL` arithmetic |
+| **Operational** | Query `business_metrics` table (spend, revenue) | `FINAL` for ReplacingMergeTree dedup |
+| **Formula** | Compose N metrics with arithmetic | CTEs per operand, `nullIf` for safe division |
 
 ### Time bucketing
 
