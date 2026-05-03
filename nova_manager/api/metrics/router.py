@@ -222,10 +222,13 @@ async def list_business_data_schema(
 ):
     """List distinct metric_name + dimension pairs from business_metrics table."""
     controller = EventsController(auth.organisation_id, auth.app_id)
-    controller.create_business_metrics_table()
     table = controller._business_metrics_table_name()
     query = f"SELECT DISTINCT metric_name, dimension FROM {table} FINAL ORDER BY metric_name, dimension"
-    result = ClickHouseService().run_query(query)
+    try:
+        result = ClickHouseService().run_query(query)
+    except Exception:
+        # Table may not exist yet if no business data has been ingested
+        return []
     return result
 
 
