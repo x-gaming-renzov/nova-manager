@@ -307,6 +307,59 @@ class EventsController(EventsArtefacts):
                 self._user_profile_props_table_name(), user_profile_rows
             )
 
+    def create_business_metrics_table(self):
+        ddl = f"""
+        CREATE TABLE IF NOT EXISTS {self._business_metrics_table_name()} (
+            metric_name String,
+            dimension String,
+            value Float64,
+            currency String DEFAULT '',
+            period_start DateTime64(3),
+            created_at DateTime64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY toYYYYMM(period_start)
+        ORDER BY (metric_name, dimension, period_start)
+        """
+        try:
+            ClickHouseService().create_table_if_not_exists(ddl)
+            logger.info(
+                f"Business metrics table created/confirmed: {self._business_metrics_table_name()}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to create business metrics table: {str(e)}")
+            raise e
+        return self._business_metrics_table_name()
+
+    def ingest_business_metrics(self, rows: list[dict]):
+        time_now = datetime.now(timezone.utc)
+        ch_rows = []
+        for i, row in enumerate(rows):
+            try:
+                value = float(row["value"])
+                if not __import__("math").isfinite(value):
+                    raise ValueError(f"value must be finite, got {value}")
+                ch_rows.append(
+                    {
+                        "metric_name": row["metric_name"],
+                        "dimension": row.get("dimension", ""),
+                        "value": value,
+                        "currency": row.get("currency", ""),
+                        "period_start": row["period_start"],
+                        "created_at": time_now.isoformat(),
+                    }
+                )
+            except (KeyError, ValueError, TypeError) as e:
+                logger.error(f"Invalid business metric row {i}: {e}")
+                raise ValueError(f"Invalid row at index {i}: {e}") from e
+
+        try:
+            ClickHouseService().insert_rows(
+                self._business_metrics_table_name(), ch_rows
+            )
+        except Exception as e:
+            logger.error(f"ClickHouse insertion failed for business metrics: {e}")
+            raise
+
     def reconcile_user_in_clickhouse(self, anonymous_id: str, identified_id: str):
         """Re-key anon rows → identified user in ClickHouse.
 

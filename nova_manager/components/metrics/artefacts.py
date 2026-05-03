@@ -27,3 +27,6 @@ class EventsArtefacts:
 
     def _user_profile_props_table_name(self) -> str:
         return f"{self.database_name}.user_profile_props"
+
+    def _business_metrics_table_name(self) -> str:
+        return f"{self.database_name}.business_metrics"
