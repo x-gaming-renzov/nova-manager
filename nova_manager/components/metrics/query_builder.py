@@ -138,7 +138,9 @@ class QueryBuilder(EventsArtefacts):
         group_by = metric_config["group_by"]
         filters = metric_config["filters"]
 
-        event_name = metric_config["event_name"]
+        event_name = self._sql_safe_identifier(
+            metric_config["event_name"], "event_name"
+        )
         distinct = metric_config["distinct"]
 
         start, end = self._get_start_end(time_range)
@@ -188,7 +190,9 @@ class QueryBuilder(EventsArtefacts):
         group_by = metric_config["group_by"]
         filters = metric_config["filters"]
 
-        event_name = metric_config["event_name"]
+        event_name = self._sql_safe_identifier(
+            metric_config["event_name"], "event_name"
+        )
         aggregation = metric_config["aggregation"]
         property = metric_config["property"]
 
@@ -322,7 +326,9 @@ class QueryBuilder(EventsArtefacts):
         bucket_expr = self._time_bucket("e.client_ts", granularity)
 
         # Initial cohort CTE
-        initial_event_name = initial_event["event_name"]
+        initial_event_name = self._sql_safe_identifier(
+            initial_event["event_name"], "initial_event.event_name"
+        )
         initial_filters = initial_event.get("filters") or {}
         initial_filters.update(filters)
 
@@ -357,7 +363,9 @@ class QueryBuilder(EventsArtefacts):
         )
 
         # Return events CTE
-        return_event_name = return_event["event_name"]
+        return_event_name = self._sql_safe_identifier(
+            return_event["event_name"], "return_event.event_name"
+        )
         return_filters = return_event.get("filters") or {}
         return_filters.update(filters)
 
@@ -516,6 +524,11 @@ class QueryBuilder(EventsArtefacts):
 
         return joins
 
+    @staticmethod
+    def _escape_sql_string(value: str) -> str:
+        """Escape single quotes for ClickHouse string literals."""
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
     def _wheres_and_joins(
         self, event_name: str, filters: dict[str, EnhancedFilterType] | None
     ) -> tuple[list[str], list[str]]:
@@ -524,10 +537,15 @@ class QueryBuilder(EventsArtefacts):
         joins = []
         wheres = []
 
+        ALLOWED_OPS = {"=", "!=", ">", "<", ">=", "<="}
+
         for key, filter_data in filters.items():
-            value = filter_data["value"]
+            value = self._escape_sql_string(filter_data["value"])
             source = filter_data["source"]
             op = filter_data["op"]
+            if op not in ALLOWED_OPS:
+                raise ValueError(f"Unsupported filter operator: {op!r}")
+            self._sql_safe_identifier(key, "filter key")
 
             if key in CORE_FIELDS:
                 wheres.append(f"e.{key} {op} '{value}'")
