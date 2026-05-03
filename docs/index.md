@@ -22,6 +22,9 @@ Welcome to the Nova Manager API documentation. This manual provides an exhaustiv
 - Experiences: `docs/experiences.md`
 - Segments: `docs/segments.md`
 - Metrics: `docs/metrics.md`
+- Business Data: `docs/business-data.md`
+- Operational Metrics: `docs/operational-metrics.md`
+- Formula Metrics: `docs/formula-metrics.md`
 - Personalisation: `docs/personalisations.md`
 - Events: `docs/events.md`
 - Evaluation (Runtime): `docs/evaluation.md`
