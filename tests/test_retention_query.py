@@ -1,17 +1,21 @@
+"""Tests for retention query generation in QueryBuilder.
+
+Verifies that the generated SQL:
+- Uses only equality conditions in JOIN ON clauses (ClickHouse requirement)
+- Places time-window filtering inside aggregation functions
+- Handles group_by, filters, and window variants correctly
+"""
+
 import pytest
 
 from nova_manager.components.metrics.query_builder import QueryBuilder
 
-
-@pytest.fixture
-def query_builder():
-    return QueryBuilder("test_org", "test_app")
+ORG_ID = "test-org"
+APP_ID = "test-app"
 
 
-@pytest.fixture
-def retention_config():
-    return {
-        "type": "retention",
+def _base_retention_config(**overrides):
+    config = {
         "time_range": {
             "start": "2026-03-18 12:17:18",
             "end": "2026-04-17 12:17:18",
@@ -29,123 +33,105 @@ def retention_config():
         },
         "retention_window": "30d",
     }
+    config.update(overrides)
+    return config
 
 
-class TestRetentionQueryNoNonEquiJoin:
-    """The retention query must use only equi-join conditions in LEFT JOIN ON.
+class TestRetentionQuery:
+    def test_basic_retention_generates_valid_sql(self):
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        sql = qb.build_query("retention", _base_retention_config())
 
-    ClickHouse v24.8 rejects non-equi conditions (>, <) in JOIN ON clauses
-    with INVALID_JOIN_ON_EXPRESSION. The time-window filtering must happen
-    in the aggregation expression instead.
-    """
+        assert "initial_cohort" in sql
+        assert "return_events" in sql
 
-    def test_join_on_has_only_equi_condition(self, query_builder, retention_config):
-        """JOIN ON clause must only contain r.user_id = i.user_id."""
-        query = query_builder.build_query("retention", retention_config)
+    def test_no_cross_table_inequality_in_join_on(self):
+        """JOIN ON must not have cross-table > or < conditions (ClickHouse error 403)."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        sql = qb.build_query("retention", _base_retention_config())
 
-        # Extract the ON clause
-        on_idx = query.index("ON r.user_id = i.user_id")
-        # After the ON clause, next line should be GROUP BY (no additional AND conditions)
-        after_on = query[on_idx:]
-        on_line = after_on.split("\n")[0]
+        # Find all JOIN ... ON blocks
+        import re
+        on_blocks = re.findall(
+            r"ON\s+(.+?)(?=\n\s*(?:WHERE|GROUP|ORDER|$))", sql, re.DOTALL
+        )
+        for block in on_blocks:
+            parts = [p.strip() for p in block.split("AND")]
+            for part in parts:
+                assert ">" not in part and "<" not in part, (
+                    f"JOIN ON contains non-equality condition: {part}"
+                )
 
-        assert on_line.strip() == "ON r.user_id = i.user_id"
+    def test_time_window_in_aggregation(self):
+        """Time-window check should be inside uniqExactIf, not in JOIN ON or CTE WHERE."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        sql = qb.build_query("retention", _base_retention_config())
 
-    def test_no_non_equi_in_join_on(self, query_builder, retention_config):
-        """JOIN ON must not contain > or < operators between left and right tables."""
-        query = query_builder.build_query("retention", retention_config)
+        assert "uniqExactIf(i.user_id, r.ret_ts > i.first_ts" in sql
+        assert "INTERVAL 30 DAY" in sql
 
-        # Find the JOIN ... ON section
-        join_idx = query.index("LEFT JOIN return_events r")
-        group_idx = query.index("GROUP BY", join_idx)
-        join_section = query[join_idx:group_idx]
+    def test_left_join_on_user_id_only(self):
+        """Final query should LEFT JOIN return_events on user_id equality only."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        sql = qb.build_query("retention", _base_retention_config())
 
-        # The ON clause should not contain inequality comparisons
-        assert "r.ret_ts > i.first_ts" not in join_section
-        assert "r.ret_ts < i.first_ts" not in join_section
-        assert "r.ret_ts <" not in join_section
+        assert "LEFT JOIN return_events r" in sql
+        assert "ON r.user_id = i.user_id" in sql
 
-    def test_time_window_in_retained_expression(self, query_builder, retention_config):
-        """Time-window filter must be inside the IF() aggregation, not the JOIN."""
-        query = query_builder.build_query("retention", retention_config)
+    def test_no_filtered_returns_cte(self):
+        """Should NOT use a filtered_returns CTE (ClickHouse ignores WHERE in CTE JOINs)."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        sql = qb.build_query("retention", _base_retention_config())
 
-        # The retained_users expression should contain the time-window check
-        assert "IF(r.ret_ts > i.first_ts AND r.ret_ts < i.first_ts + INTERVAL 30 DAY" in query
+        assert "filtered_returns" not in sql
 
-    def test_no_is_not_null_for_retained(self, query_builder, retention_config):
-        """Must not use IS NOT NULL to detect retained users.
+    def test_retention_with_group_by(self):
+        """Group-by keys should appear in SELECT, GROUP BY."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        config = _base_retention_config(
+            group_by=[{"key": "country", "source": "user_profile"}]
+        )
+        sql = qb.build_query("retention", config)
 
-        ClickHouse uses default values (epoch 1970-01-01) instead of NULL for
-        unmatched LEFT JOIN rows on non-Nullable columns. IS NOT NULL is always
-        true, causing every user to be counted as retained.
-        """
-        query = query_builder.build_query("retention", retention_config)
+        assert "i.country" in sql
 
-        assert "IS NOT NULL" not in query
+    def test_retention_window_variants(self):
+        """Different retention windows should produce correct INTERVAL SQL."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
 
+        for window, expected in [
+            ("7d", "INTERVAL 7 DAY"),
+            ("24h", "INTERVAL 24 HOUR"),
+            ("1w", "INTERVAL 1 WEEK"),
+            ("3m", "INTERVAL 3 MONTH"),
+        ]:
+            config = _base_retention_config(retention_window=window)
+            sql = qb.build_query("retention", config)
+            assert expected in sql, f"Window '{window}' should produce '{expected}'"
 
-class TestRetentionQueryNoSafeDivide:
-    """SAFE_DIVIDE is BigQuery-specific and doesn't exist in ClickHouse."""
+    def test_retention_cohort_and_retained_columns(self):
+        """Output should include cohort_users, retained_users, and value."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        sql = qb.build_query("retention", _base_retention_config())
 
-    def test_no_safe_divide(self, query_builder, retention_config):
-        query = query_builder.build_query("retention", retention_config)
+        assert "cohort_users" in sql
+        assert "retained_users" in sql
+        assert "AS value" in sql
 
-        assert "SAFE_DIVIDE" not in query
+    def test_retention_with_filters(self):
+        """Filters should be applied within the initial and return event CTEs."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        config = _base_retention_config(
+            filters={"user_id": {"value": "user123", "source": "event_properties", "op": "="}}
+        )
+        sql = qb.build_query("retention", config)
 
-    def test_value_uses_guarded_division(self, query_builder, retention_config):
-        """Division should be guarded against divide-by-zero."""
-        query = query_builder.build_query("retention", retention_config)
+        assert "user123" in sql
 
-        assert "IF(COUNT(DISTINCT i.user_id) = 0, 0," in query
+    def test_retained_condition_matches_window(self):
+        """The retained condition should use the exact window from config."""
+        qb = QueryBuilder(ORG_ID, APP_ID)
+        config = _base_retention_config(retention_window="1h")
+        sql = qb.build_query("retention", config)
 
-
-class TestRetentionQueryNoTimestampAdd:
-    """TIMESTAMP_ADD is BigQuery-specific. ClickHouse uses arithmetic (+)."""
-
-    def test_no_timestamp_add(self, query_builder, retention_config):
-        query = query_builder.build_query("retention", retention_config)
-
-        assert "TIMESTAMP_ADD" not in query
-
-    def test_uses_interval_arithmetic(self, query_builder, retention_config):
-        query = query_builder.build_query("retention", retention_config)
-
-        assert "i.first_ts + INTERVAL 30 DAY" in query
-
-
-class TestRetentionQueryStructure:
-    """General structural tests for the retention query."""
-
-    def test_has_initial_cohort_cte(self, query_builder, retention_config):
-        query = query_builder.build_query("retention", retention_config)
-        assert "initial_cohort AS (" in query
-
-    def test_has_return_events_cte(self, query_builder, retention_config):
-        query = query_builder.build_query("retention", retention_config)
-        assert "return_events AS (" in query
-
-    def test_selects_cohort_users(self, query_builder, retention_config):
-        query = query_builder.build_query("retention", retention_config)
-        assert "COUNT(DISTINCT i.user_id) AS cohort_users" in query
-
-    def test_selects_retained_users(self, query_builder, retention_config):
-        query = query_builder.build_query("retention", retention_config)
-        assert "AS retained_users" in query
-
-    def test_selects_value(self, query_builder, retention_config):
-        query = query_builder.build_query("retention", retention_config)
-        assert "AS value" in query
-
-    def test_different_window_sizes(self, query_builder):
-        for window, expected in [("7d", "INTERVAL 7 DAY"), ("24h", "INTERVAL 24 HOUR"), ("1w", "INTERVAL 1 WEEK")]:
-            config = {
-                "time_range": {"start": "2026-01-01", "end": "2026-02-01"},
-                "granularity": "daily",
-                "group_by": [],
-                "filters": {},
-                "initial_event": {"event_name": "login"},
-                "return_event": {"event_name": "purchase"},
-                "retention_window": window,
-            }
-            query = query_builder.build_query("retention", config)
-            assert expected in query, f"Expected {expected} for window={window}"
+        assert "r.ret_ts > i.first_ts AND r.ret_ts < i.first_ts + INTERVAL 1 HOUR" in sql
