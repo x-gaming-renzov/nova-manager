@@ -5,6 +5,7 @@ from nova_manager.api.metrics.request_response import (
     CreateMetricRequest,
     ComputeMetricRequest,
     EventsSchemaResponse,
+    IngestBusinessDataRequest,
     MetricResponse,
     TrackEventRequest,
     TrackEventsRequest,
@@ -188,6 +189,44 @@ async def list_user_profile_keys(
         )
 
     return user_profile_keys
+
+
+@router.post("/business-data/")
+async def ingest_business_data(
+    request: IngestBusinessDataRequest,
+    auth: AuthContext = Depends(require_app_context),
+):
+    """Ingest operational/business data (marketing spend, payouts, revenue, etc.)."""
+    controller = EventsController(auth.organisation_id, auth.app_id)
+    controller.create_business_metrics_table()
+    rows = [
+        {
+            "metric_name": item.metric_name,
+            "dimension": item.dimension,
+            "value": item.value,
+            "period_start": item.period_start.isoformat(),
+            "currency": item.currency,
+        }
+        for item in request.data
+    ]
+    try:
+        controller.ingest_business_metrics(rows)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"success": True, "count": len(rows)}
+
+
+@router.get("/business-data/schema/")
+async def list_business_data_schema(
+    auth: AuthContext = Depends(require_app_context),
+):
+    """List distinct metric_name + dimension pairs from business_metrics table."""
+    controller = EventsController(auth.organisation_id, auth.app_id)
+    controller.create_business_metrics_table()
+    table = controller._business_metrics_table_name()
+    query = f"SELECT DISTINCT metric_name, dimension FROM {table} FINAL ORDER BY metric_name, dimension"
+    result = ClickHouseService().run_query(query)
+    return result
 
 
 @router.post("/")
