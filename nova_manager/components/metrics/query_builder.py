@@ -595,7 +595,18 @@ class QueryBuilder(EventsArtefacts):
             if "start" not in time_range or "end" not in time_range:
                 raise ValueError("Invalid time range")
 
-            return time_range["start"], time_range["end"]
+            start_str = str(time_range["start"])
+            end_str = str(time_range["end"])
+            # Validate datetime format to prevent garbage in SQL
+            ts_pattern = re.compile(
+                r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}:\d{2})?$"
+            )
+            if not ts_pattern.match(start_str):
+                raise ValueError(f"Invalid start date format: {start_str!r}")
+            if not ts_pattern.match(end_str):
+                raise ValueError(f"Invalid end date format: {end_str!r}")
+
+            return start_str, end_str
 
     def _parse_interval_string(self, interval_str: str) -> tuple[int, str]:
         m = re.fullmatch(r"(\d+)([hdwmy])", interval_str.strip().lower())
