@@ -21,6 +21,7 @@ Welcome to the Nova Manager API documentation. This manual provides an exhaustiv
 - Objects (Feature Flags): `docs/objects.md`
 - Experiences: `docs/experiences.md`
 - Segments: `docs/segments.md`
+- **GTM KPI Simulator: `docs/gtm-kpi-simulator.md`** (feature overview)
 - Metrics: `docs/metrics.md`
 - Business Data: `docs/business-data.md`
 - Operational Metrics: `docs/operational-metrics.md`
