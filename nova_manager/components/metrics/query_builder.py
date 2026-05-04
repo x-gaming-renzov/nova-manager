@@ -16,9 +16,10 @@ class TimeRange(TypedDict):
     end: str
 
 
-class EventFilter(TypedDict):
+class EventFilter(TypedDict, total=False):
     event_name: str
     filters: dict | None
+    distinct: bool
 
 
 class EnhancedFilterType(TypedDict):
@@ -256,7 +257,7 @@ class QueryBuilder(EventsArtefacts):
         numerator_expression = self._build_count_query(
             {
                 "event_name": numerator_config["event_name"],
-                "distinct": False,
+                "distinct": numerator_config.get("distinct", False),
                 "time_range": time_range,
                 "granularity": granularity,
                 "group_by": group_by,
@@ -271,7 +272,7 @@ class QueryBuilder(EventsArtefacts):
         denominator_expression = self._build_count_query(
             {
                 "event_name": denominator_config["event_name"],
-                "distinct": False,
+                "distinct": denominator_config.get("distinct", False),
                 "time_range": time_range,
                 "granularity": granularity,
                 "group_by": group_by,

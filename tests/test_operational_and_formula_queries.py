@@ -216,6 +216,41 @@ class TestOperationalQuery:
         assert "GROUP BY period, currency" in sql
 
 
+# ── Ratio metric tests ──────────────────────────────────────
+
+
+class TestRatioQuery:
+    def test_default_counts_events(self):
+        sql = qb().build_query(
+            "ratio",
+            {
+                "numerator": {"event_name": "purchase"},
+                "denominator": {"event_name": "page_view"},
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "COUNT(*)" in sql
+        assert "uniqExact" not in sql
+
+    def test_distinct_counts_unique_users(self):
+        sql = qb().build_query(
+            "ratio",
+            {
+                "numerator": {"event_name": "purchase", "distinct": True},
+                "denominator": {"event_name": "page_view", "distinct": True},
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "uniqExact" in sql
+        assert "COUNT(*)" not in sql
+
+
 # ── Formula metric tests ─────────────────────────────────────
 
 
