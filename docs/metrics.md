@@ -228,7 +228,7 @@ These fields are shared across metric types:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `time_range` | `{"start": "YYYY-MM-DD HH:MM:SS", "end": "..."}` or string like `"7d"`, `"30d"`, `"6m"` | Time range to query. Relative strings calculated from current UTC time. |
+| `time_range` | `{"start": "YYYY-MM-DD HH:MM:SS", "end": "..."}` or string like `"24h"`, `"7d"`, `"2w"`, `"6m"`, `"1y"` | Time range to query. Relative strings use format `<number><unit>` where unit is `h` (hour), `d` (day), `w` (week), `m` (month), `y` (year), calculated from current UTC time. |
 | `granularity` | `hourly`, `daily`, `weekly`, `monthly`, `none` | Time bucketing for results. |
 | `group_by` | array of `{"key": "<name>", "source": "<source>"}` | Group results by a dimension. Sources: `event_properties`, `user_profile`, `user_experience`, or empty string for operational dimension. |
 | `filters` | object | Key-value filters. Each filter has `value`, `source`, and `op` (`=`, `!=`, `>`, `<`, `>=`, `<=`). |

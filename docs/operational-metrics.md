@@ -99,8 +99,8 @@ Response
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `metric_name` | string | yes | Must match a `metric_name` from ingested business data. |
-| `aggregation` | string | yes | One of `sum`, `avg`, `min`, `max`. |
+| `aggregation` | string | no | One of `sum`, `avg`, `min`, `max`. Defaults to `sum`. |
 | `dimension_filter` | string | no | Filter to a specific dimension value. |
 | `time_range` | object or string | yes | `{"start": "...", "end": "..."}` or relative like `"6m"`, `"30d"`. |
 | `granularity` | string | yes | `hourly`, `daily`, `weekly`, `monthly`, or `none`. |
-| `group_by` | array | no | Use `[{"key": "dimension", "source": ""}]` to group by dimension. |
+| `group_by` | array | no | Use `[{"key": "dimension", "source": ""}]` to group by dimension. Only the `dimension` column is groupable for operational metrics. |

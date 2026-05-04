@@ -258,6 +258,7 @@ Queries support these granularities via ClickHouse time-truncation functions:
 | `daily` | `toStartOfDay(ts)` |
 | `weekly` | `toMonday(ts)` |
 | `monthly` | `toStartOfMonth(ts)` |
+| `none` | `toDateTime('1970-01-01 00:00:00')` (all rows collapse to a single period) |
 
 ### Filter & group-by sources
 

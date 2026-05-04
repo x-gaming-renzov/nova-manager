@@ -112,13 +112,17 @@ The `spend` operand queries business data, while `mau` counts distinct users fro
 
 | KPI | Expression | Operands |
 |-----|-----------|----------|
-| CAC | `spend / mau` | operational(marketing_spend) / count(distinct session_start) |
-| ROAS | `revenue / spend` | operational(total_revenue) / operational(marketing_spend) |
-| ARPU | `revenue / mau` | operational(total_revenue) / count(distinct session_start) |
-| Net Margin | `revenue - spend` | operational(total_revenue) - operational(marketing_spend) |
-| Cost per Tournament | `spend / tournaments` | operational(marketing_spend) / count(tournament.created) |
-| Revenue per Tournament | `revenue / tournaments` | operational(total_revenue) / count(tournament.created) |
+| CAC | `spend / mau` | operational(total_marketing_spend) / operational(mau) or count(distinct session_start) |
+| ROAS | `revenue / spend` | operational(total_revenue) / operational(total_marketing_spend) |
+| ARPU | `revenue / mau` | operational(total_revenue) / operational(mau) or count(distinct session_start) |
+| Net Margin | `revenue - spend` | operational(total_revenue) - operational(total_marketing_spend) |
 | Margin % | `(revenue - spend) / revenue` | Two operational operands with parenthesized expression |
+| Supply CAC | `supply_ua / active_tos` | operational(supply_ua) / operational(active_tos) |
+| Demand CAC | `demand_ua / inorganic_players` | operational(demand_ua) / operational(inorganic_players) |
+| Cost per Tournament | `spend / tournaments` | operational(total_marketing_spend) / operational(total_tournaments) or count(tournament.created) |
+| Revenue per Tournament | `revenue / tournaments` | operational(total_revenue) / operational(total_tournaments) or count(tournament.created) |
+
+Operands can mix types freely. For example, CAC can use an `operational` operand for spend and a `count` operand for MAU (from events), or both `operational` if MAU is ingested as business data.
 
 ---
 
@@ -147,8 +151,8 @@ The `spend` operand queries business data, while `mau` counts distinct users fro
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `operands` | object | yes | Map of name to `{type, config}`. Each operand is a full metric config. Type cannot be `formula`. |
+| `operands` | object | yes | Map of name to `{type, config}`. Each operand is a full metric config. Type cannot be `formula`. Operand configs do not need `time_range`, `granularity`, or `group_by` — these are set from the formula level. |
 | `expression` | string | yes | Arithmetic expression using operand names. |
 | `time_range` | object or string | yes | Overrides all operand time ranges. |
 | `granularity` | string | yes | Overrides all operand granularities. |
-| `group_by` | array | no | Applied to all operands. Results joined on period + group keys. |
+| `group_by` | array | no | Applied to all operands. Results joined on period + group keys. Defaults to `[]`. |

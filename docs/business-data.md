@@ -70,6 +70,17 @@ Field reference:
 | `period_start` | datetime | yes | Start of the period this value covers. ISO 8601 format. |
 | `currency` | string | no | Currency code (e.g. `USD`). Max 10 chars. |
 
+Common metric names used in the GTM KPI flow:
+
+| Category | metric_name | Example dimensions |
+|----------|-------------|-------------------|
+| Supply | `active_tos`, `total_tournaments`, `supply_ua` | (none) |
+| Supply costs | `to_incentive_l1`, `to_incentive_l2`, `to_incentive_l3`, `sponsored_credits` | `milestones`, `leaderboard`, `grand_prize` |
+| Demand | `mau`, `dau`, `inorganic_players`, `demand_ua` | (none) |
+| Marketing | `marketing_spend`, `total_marketing_spend` | `to_empowerment`, `prize_pools`, `social_channel`, `college_activation`, `kol_influencer`, `seo_aso`, `bgmi_giveaways`, `pr_media`, `marquee_tourney` |
+| Revenue | `ad_revenue`, `sponsorship_revenue`, `webshop_revenue`, `total_revenue` | (none) |
+| Engagement | `fill_rate`, `total_player_slots`, `avg_participants` | (none) |
+
 ---
 
 #### GET /api/v1/metrics/business-data/schema/
