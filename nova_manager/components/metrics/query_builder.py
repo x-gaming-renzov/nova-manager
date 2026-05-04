@@ -718,21 +718,28 @@ class QueryBuilder(EventsArtefacts):
             # Override time_range and granularity from the formula level
             op_config["time_range"] = time_range
             op_config["granularity"] = granularity
-            # Only pass group_by to operands that support it
-            if operand["type"] != "ratio":
-                op_config.setdefault("group_by", group_by)
+            # Operational metrics only support grouping by 'dimension';
+            # filter out unsupported group_by keys so the CTE schema matches
+            # what the final SELECT/JOIN expects.
+            if operand["type"] == "operational":
+                op_group_by = [g for g in group_by if g["key"] == "dimension"]
             else:
-                op_config.setdefault("group_by", group_by)
+                op_group_by = group_by
+            op_config.setdefault("group_by", op_group_by)
             op_config.setdefault("filters", {})
             sub_query = self.build_query(operand["type"], op_config)
             cte_parts.append(f"op_{name} AS (\n{sub_query}\n)")
 
         with_expression = "WITH\n" + ",\n".join(cte_parts)
 
-        # Build final SELECT joining all CTEs on period
+        # Build final SELECT joining all CTEs on period.
+        # Use only group_by keys that the first operand actually emits.
         first_name = operand_names[0]
-
-        group_by_keys = [item["key"] for item in group_by]
+        first_type = operands[first_name]["type"]
+        if first_type == "operational":
+            group_by_keys = [item["key"] for item in group_by if item["key"] == "dimension"]
+        else:
+            group_by_keys = [item["key"] for item in group_by]
 
         select_parts = [f"op_{first_name}.period AS period"]
         select_parts += [f"op_{first_name}.{c} AS {c}" for c in group_by_keys]

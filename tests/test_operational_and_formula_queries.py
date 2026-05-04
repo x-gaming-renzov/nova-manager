@@ -394,6 +394,55 @@ class TestFormulaQuery:
         assert "100" in sql
         assert "op_spend.value * 100" in sql
 
+    def test_mixed_operands_non_dimension_group_by(self):
+        """Operational operand should not emit columns it doesn't support."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [{"key": "country", "source": "user_profile"}],
+                "operands": {
+                    "spend": {
+                        "type": "operational",
+                        "config": {"metric_name": "spend", "aggregation": "sum"},
+                    },
+                    "mau": {
+                        "type": "count",
+                        "config": {"event_name": "login", "distinct": True},
+                    },
+                },
+                "expression": "spend / mau",
+            },
+        )
+        # operational CTE must not reference 'country' (it only supports 'dimension')
+        assert "op_spend.country" not in sql
+        # count CTE should still have country
+        assert "val_country.value AS country" in sql
+
+    def test_operational_dimension_group_by_in_formula(self):
+        """dimension group_by should work for operational operands in formulas."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [{"key": "dimension", "source": ""}],
+                "operands": {
+                    "a": {
+                        "type": "operational",
+                        "config": {"metric_name": "x", "aggregation": "sum"},
+                    },
+                    "b": {
+                        "type": "operational",
+                        "config": {"metric_name": "y", "aggregation": "sum"},
+                    },
+                },
+                "expression": "a / b",
+            },
+        )
+        assert "GROUP BY period, dimension" in sql
+
 
 # ── Expression parser safety tests ───────────────────────────
 
