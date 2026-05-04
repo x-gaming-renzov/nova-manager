@@ -1,3 +1,4 @@
+import copy
 from typing import Dict, List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -83,9 +84,8 @@ async def compute_metric(
     organisation_id = auth.organisation_id
     app_id = auth.app_id
     type = compute_request.type
-    # copy config and extract any segment filters embedded in filters
-    # copy config and extract filters
-    config = compute_request.config.copy()
+    # deep-copy config so mutations (pop, filter merging) don't leak
+    config = copy.deepcopy(compute_request.config)
     filters = config.get("filters", {}) or {}
     # extract explicit segment_ids list from config
     config_segment_ids = config.pop("segment_ids", []) or []
