@@ -629,10 +629,14 @@ class QueryBuilder(EventsArtefacts):
             )
         return value
 
+    # Columns in business_metrics that can be filtered/grouped
+    _BUSINESS_METRIC_COLUMNS = {"dimension", "currency", "metric_name"}
+
     def _build_operational_query(self, metric_config: OperationalMetricConfig):
         time_range = metric_config["time_range"]
         granularity = metric_config["granularity"]
         group_by = metric_config.get("group_by", [])
+        filters = metric_config.get("filters") or {}
         metric_name = self._sql_safe_identifier(
             metric_config["metric_name"], "metric_name"
         )
@@ -651,13 +655,13 @@ class QueryBuilder(EventsArtefacts):
 
         select_parts = [f"{time_bucket} AS period"]
 
-        # Support group_by on 'dimension' (the only groupable column in business_metrics)
+        # Support group_by on business_metrics columns (dimension, currency)
         group_by_keys = []
         for item in group_by:
             key = item["key"]
-            if key == "dimension":
-                select_parts.append("dimension")
-                group_by_keys.append("dimension")
+            if key in self._BUSINESS_METRIC_COLUMNS:
+                select_parts.append(key)
+                group_by_keys.append(key)
 
         agg_expr = f"{aggregation.upper()}(value) AS value"
         select_parts.append(agg_expr)
@@ -675,6 +679,17 @@ class QueryBuilder(EventsArtefacts):
 
         if dimension_filter:
             where_parts.append(f"dimension = '{dimension_filter}'")
+
+        # Apply filters on business_metrics columns
+        ALLOWED_OPS = {"=", "!=", ">", "<", ">=", "<="}
+        for key, filter_data in filters.items():
+            if key in self._BUSINESS_METRIC_COLUMNS:
+                value = self._escape_sql_string(filter_data["value"])
+                op = filter_data.get("op", "=")
+                if op not in ALLOWED_OPS:
+                    raise ValueError(f"Unsupported filter operator: {op!r}")
+                self._sql_safe_identifier(key, "filter key")
+                where_parts.append(f"{key} {op} '{value}'")
 
         where_expression = "WHERE " + " AND ".join(where_parts)
 
@@ -718,11 +733,11 @@ class QueryBuilder(EventsArtefacts):
             # Override time_range and granularity from the formula level
             op_config["time_range"] = time_range
             op_config["granularity"] = granularity
-            # Operational metrics only support grouping by 'dimension';
+            # Operational metrics only support grouping by business_metrics columns;
             # filter out unsupported group_by keys so the CTE schema matches
             # what the final SELECT/JOIN expects.
             if operand["type"] == "operational":
-                op_group_by = [g for g in group_by if g["key"] == "dimension"]
+                op_group_by = [g for g in group_by if g["key"] in self._BUSINESS_METRIC_COLUMNS]
             else:
                 op_group_by = group_by
             op_config.setdefault("group_by", op_group_by)
@@ -737,7 +752,7 @@ class QueryBuilder(EventsArtefacts):
         first_name = operand_names[0]
         first_type = operands[first_name]["type"]
         if first_type == "operational":
-            group_by_keys = [item["key"] for item in group_by if item["key"] == "dimension"]
+            group_by_keys = [item["key"] for item in group_by if item["key"] in self._BUSINESS_METRIC_COLUMNS]
         else:
             group_by_keys = [item["key"] for item in group_by]
 

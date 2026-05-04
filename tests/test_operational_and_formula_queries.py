@@ -159,6 +159,62 @@ class TestOperationalQuery:
             )
             assert f"{agg.upper()}(value) AS value" in sql
 
+    def test_filters_applied_to_dimension(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {"dimension": {"value": "google_ads", "source": "", "op": "="}},
+            },
+        )
+        assert "dimension = 'google_ads'" in sql
+
+    def test_filters_applied_to_currency(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "revenue",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {"currency": {"value": "USD", "source": "", "op": "="}},
+            },
+        )
+        assert "currency = 'USD'" in sql
+
+    def test_irrelevant_filters_skipped(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "revenue",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {"country": {"value": "US", "source": "user_profile", "op": "="}},
+            },
+        )
+        assert "country" not in sql
+
+    def test_group_by_currency(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "revenue",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [{"key": "currency", "source": ""}],
+                "filters": {},
+            },
+        )
+        assert "GROUP BY period, currency" in sql
+
 
 # ── Formula metric tests ─────────────────────────────────────
 
