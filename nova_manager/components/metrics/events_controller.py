@@ -393,7 +393,7 @@ class EventsController(EventsArtefacts):
                 )
                 ch.execute(insert_stmt)
 
-                # 2. Remove the old anon rows
+                # 2. Remove the old anon rows (async mutation in ClickHouse)
                 delete_stmt = (
                     f"ALTER TABLE {table} DELETE "
                     f"WHERE user_id = '{safe_anon}'"
@@ -403,5 +403,7 @@ class EventsController(EventsArtefacts):
             except Exception as e:
                 logger.error(
                     f"reconcile_user_in_clickhouse failed for {table} "
-                    f"(completed {len(completed_tables)}/{len(tables)} tables): {e}"
+                    f"(completed {len(completed_tables)}/{len(tables)} tables, "
+                    f"anon={anonymous_id}, identified={identified_id}): {e}"
                 )
+                raise
