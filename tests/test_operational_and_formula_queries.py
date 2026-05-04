@@ -557,6 +557,16 @@ class TestExpressionParser:
         with pytest.raises(ValueError, match="Unmatched closing parenthesis"):
             QueryBuilder._safe_parse_expression("a + b)", ["a", "b"])
 
+    def test_unused_operands_rejected(self):
+        with pytest.raises(ValueError, match="Unused operand.*unused"):
+            QueryBuilder._safe_parse_expression("a + b", ["a", "b", "unused"])
+
+    def test_all_operands_used_passes(self):
+        result = QueryBuilder._safe_parse_expression("a + b + c", ["a", "b", "c"])
+        assert "op_a.value" in result
+        assert "op_b.value" in result
+        assert "op_c.value" in result
+
 
 # ── SQL injection safety tests for operational ────────────
 

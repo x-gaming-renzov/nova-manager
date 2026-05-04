@@ -816,13 +816,23 @@ class QueryBuilder(EventsArtefacts):
         if depth != 0:
             raise ValueError("Unmatched opening parenthesis in expression")
 
-        # Verify all operand names are used
+        # Verify expression tokens ⊆ operand_names (no unknown references)
         used_operands = {t for t in re.findall(r"[a-zA-Z_]\w*", expression)}
         unknown = used_operands - set(operand_names)
         if unknown:
             raise ValueError(
                 f"Unknown operand(s) in expression: {', '.join(unknown)}. "
                 f"Defined operands: {', '.join(operand_names)}"
+            )
+
+        # Verify operand_names ⊆ expression tokens (no unused operands that
+        # would generate parasitic CTEs and INNER JOINs)
+        unused = set(operand_names) - used_operands
+        if unused:
+            raise ValueError(
+                f"Unused operand(s): {', '.join(unused)}. "
+                f"All defined operands must appear in the expression. "
+                f"Remove them or update the expression."
             )
 
         # Wrap division: replace "/ op_X.value" with "/ nullIf(op_X.value, 0)"
