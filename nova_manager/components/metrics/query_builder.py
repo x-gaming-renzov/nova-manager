@@ -251,8 +251,7 @@ class QueryBuilder(EventsArtefacts):
         filters = metric_config["filters"]
 
         numerator_config = metric_config["numerator"]
-        numerator_filters = numerator_config.get("filters") or {}
-        numerator_filters.update(filters)
+        numerator_filters = {**(numerator_config.get("filters") or {}), **filters}
 
         numerator_expression = self._build_count_query(
             {
@@ -266,8 +265,7 @@ class QueryBuilder(EventsArtefacts):
         )
 
         denominator_config = metric_config["denominator"]
-        denominator_filters = denominator_config.get("filters") or {}
-        denominator_filters.update(filters)
+        denominator_filters = {**(denominator_config.get("filters") or {}), **filters}
 
         denominator_expression = self._build_count_query(
             {
