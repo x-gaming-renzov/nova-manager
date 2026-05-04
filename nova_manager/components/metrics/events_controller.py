@@ -360,6 +360,11 @@ class EventsController(EventsArtefacts):
             logger.error(f"ClickHouse insertion failed for business metrics: {e}")
             raise
 
+    @staticmethod
+    def _escape_ch_string(value: str) -> str:
+        """Escape a value for safe embedding in a ClickHouse string literal."""
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
     def reconcile_user_in_clickhouse(self, anonymous_id: str, identified_id: str):
         """Re-key anon rows → identified user in ClickHouse.
 
@@ -367,6 +372,9 @@ class EventsController(EventsArtefacts):
         cannot be updated in-place.  Instead we INSERT … SELECT with the
         new user_id and then DELETE the old rows.
         """
+        safe_anon = self._escape_ch_string(anonymous_id)
+        safe_identified = self._escape_ch_string(identified_id)
+
         ch = ClickHouseService()
         tables = [
             self._raw_events_table_name(),
@@ -374,21 +382,26 @@ class EventsController(EventsArtefacts):
             self._user_profile_props_table_name(),
             self._user_experience_table_name(),
         ]
+        completed_tables = []
         for table in tables:
             try:
                 # 1. Copy rows with the new user_id
                 insert_stmt = (
                     f"INSERT INTO {table} "
-                    f"SELECT '{identified_id}' AS user_id, * EXCEPT(user_id) "
-                    f"FROM {table} WHERE user_id = '{anonymous_id}'"
+                    f"SELECT '{safe_identified}' AS user_id, * EXCEPT(user_id) "
+                    f"FROM {table} WHERE user_id = '{safe_anon}'"
                 )
                 ch.execute(insert_stmt)
 
                 # 2. Remove the old anon rows
                 delete_stmt = (
                     f"ALTER TABLE {table} DELETE "
-                    f"WHERE user_id = '{anonymous_id}'"
+                    f"WHERE user_id = '{safe_anon}'"
                 )
                 ch.execute(delete_stmt)
+                completed_tables.append(table)
             except Exception as e:
-                logger.error(f"reconcile_user_in_clickhouse failed for {table}: {e}")
+                logger.error(
+                    f"reconcile_user_in_clickhouse failed for {table} "
+                    f"(completed {len(completed_tables)}/{len(tables)} tables): {e}"
+                )

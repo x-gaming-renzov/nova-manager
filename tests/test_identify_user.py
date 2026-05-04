@@ -556,3 +556,23 @@ class TestEventsControllerReconcile:
                 assert "id-xyz" in stmt
             for stmt in delete_calls:
                 assert "anon-xyz" in stmt
+
+    async def test_reconcile_user_escapes_sql_injection(self):
+        with patch(
+            "nova_manager.components.metrics.events_controller.ClickHouseService"
+        ) as MockCH:
+            mock_ch = MagicMock()
+            MockCH.return_value = mock_ch
+
+            controller = EventsController(TEST_ORG_ID, TEST_APP_ID)
+            controller.reconcile_user_in_clickhouse(
+                "' OR '1'='1", "id'; DROP TABLE x; --"
+            )
+
+            calls = [c.args[0] for c in mock_ch.execute.call_args_list]
+            for stmt in calls:
+                # Raw unescaped quotes must not appear — they'd break out of the literal
+                assert "' OR '1'='1" not in stmt
+                assert "id'; DROP" not in stmt
+                # Escaped quotes should be present instead
+                assert "\\'" in stmt
