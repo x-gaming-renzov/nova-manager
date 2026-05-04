@@ -850,18 +850,40 @@ class QueryBuilder(EventsArtefacts):
                 f"Remove them or update the expression."
             )
 
-        # Wrap division: replace "/ op_X.value" with "/ nullIf(op_X.value, 0)"
+        # Wrap division denominators with nullIf(..., 0) for safe division.
+        # Handles: / op_X.value, / (expr), / numeric_literal
         result_tokens = []
         i = 0
         while i < len(validated_tokens):
-            if (
-                validated_tokens[i] == "/"
-                and i + 1 < len(validated_tokens)
-                and validated_tokens[i + 1].startswith("op_")
-            ):
+            if validated_tokens[i] == "/" and i + 1 < len(validated_tokens):
+                next_token = validated_tokens[i + 1]
                 result_tokens.append("/")
-                result_tokens.append(f"nullIf({validated_tokens[i + 1]}, 0)")
-                i += 2
+
+                if next_token.startswith("op_"):
+                    # Simple operand: / op_X.value
+                    result_tokens.append(f"nullIf({next_token}, 0)")
+                    i += 2
+                elif next_token == "(":
+                    # Parenthesized sub-expression: collect tokens until matching ")"
+                    paren_depth = 0
+                    sub_tokens = []
+                    j = i + 1
+                    while j < len(validated_tokens):
+                        if validated_tokens[j] == "(":
+                            paren_depth += 1
+                        elif validated_tokens[j] == ")":
+                            paren_depth -= 1
+                        sub_tokens.append(validated_tokens[j])
+                        if paren_depth == 0:
+                            break
+                        j += 1
+                    inner = " ".join(sub_tokens[1:-1])  # strip outer parens
+                    result_tokens.append(f"nullIf(( {inner} ), 0)")
+                    i = j + 1
+                else:
+                    # Numeric literal or other: wrap it
+                    result_tokens.append(f"nullIf({next_token}, 0)")
+                    i += 2
             else:
                 result_tokens.append(validated_tokens[i])
                 i += 1

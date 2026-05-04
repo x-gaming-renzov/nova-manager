@@ -574,6 +574,18 @@ class TestExpressionParser:
         )
         assert "nullIf(op_b.value, 0)" in result
 
+    def test_division_wraps_nullif_complex_denominator(self):
+        result = QueryBuilder._safe_parse_expression(
+            "a / (b + c)", ["a", "b", "c"]
+        )
+        assert "nullIf(( op_b.value + op_c.value ), 0)" in result
+
+    def test_division_wraps_nullif_numeric_literal(self):
+        result = QueryBuilder._safe_parse_expression(
+            "a / 2", ["a"]
+        )
+        assert "nullIf(2, 0)" in result
+
     def test_no_formula_nesting(self):
         with pytest.raises(ValueError, match="cannot be of type 'formula'"):
             qb().build_query(
