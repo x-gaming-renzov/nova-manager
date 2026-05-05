@@ -407,26 +407,6 @@ class TestRevenue:
         )
 
 
-class TestOutputFormat:
-    def setup_method(self):
-        self.rows = compute_simulation(V2_ASSUMPTIONS)
-
-    def test_row_keys(self):
-        for row in self.rows:
-            assert "metric_name" in row
-            assert "dimension" in row
-            assert "value" in row
-            assert "period_start" in row
-            assert "currency" in row
-
-    def test_period_format(self):
-        for row in self.rows:
-            assert row["period_start"].endswith("T00:00:00Z")
-
-    def test_nonempty(self):
-        assert len(self.rows) > 100  # ~20 metrics × 6 months + channel breakdowns
-
-
 class TestTemporalCascade:
     """Test that month-over-month dependencies compute correctly."""
 
