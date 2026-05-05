@@ -24,6 +24,19 @@ class CreateSimulationRequest(BaseModel):
             )
         return v
 
+    @field_validator("assumptions")
+    @classmethod
+    def assumptions_must_have_required_keys(cls, v: dict) -> dict:
+        for key in ("time_range", "months"):
+            if key not in v:
+                raise ValueError(f"assumptions must contain '{key}'")
+        tr = v["time_range"]
+        if not isinstance(tr, dict) or "start_month" not in tr or "end_month" not in tr:
+            raise ValueError("time_range must contain 'start_month' and 'end_month'")
+        if not isinstance(v["months"], dict):
+            raise ValueError("months must be a dict keyed by YYYY-MM strings")
+        return v
+
 
 class UpdateSimulationRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=256)
@@ -36,6 +49,21 @@ class UpdateSimulationRequest(BaseModel):
     def status_must_be_valid(cls, v: str | None) -> str | None:
         if v is not None and v not in {"draft", "active", "archived"}:
             raise ValueError(f"status must be draft, active, or archived, got: {v!r}")
+        return v
+
+    @field_validator("assumptions")
+    @classmethod
+    def assumptions_must_have_required_keys(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        for key in ("time_range", "months"):
+            if key not in v:
+                raise ValueError(f"assumptions must contain '{key}'")
+        tr = v["time_range"]
+        if not isinstance(tr, dict) or "start_month" not in tr or "end_month" not in tr:
+            raise ValueError("time_range must contain 'start_month' and 'end_month'")
+        if not isinstance(v["months"], dict):
+            raise ValueError("months must be a dict keyed by YYYY-MM strings")
         return v
 
 
