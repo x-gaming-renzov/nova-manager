@@ -168,6 +168,11 @@ def extract_assumptions(ws) -> dict:
 
     col_letters = list(MONTH_COLS.keys())  # F, G, H, I, J, K
 
+    # Read exchange rate from cell B3 (global for all months)
+    usd_inr_rate = ws["B3"].value
+    if usd_inr_rate is None or not isinstance(usd_inr_rate, (int, float)):
+        usd_inr_rate = 90  # fallback
+
     assumptions = {
         "time_range": {"start_month": "2026-07", "end_month": "2026-12"},
         "seed_values": {"active_tos": 0},
@@ -214,7 +219,7 @@ def extract_assumptions(ws) -> dict:
             "initial_credit_new_users_inr": float(_val("Initial Credit for new users", col, default=0)),
             "r1_achievement_rate": float(_val("R1(10+TM)", col, default=0)),
             "r2_achievement_rate": float(_val("R2(20+TM)", col, default=0)),
-            "usd_inr_rate": 90,
+            "usd_inr_rate": float(usd_inr_rate),
             "marketing_budgets": budgets,
             "ad_revenue": {
                 "static_impressions_per_dau": float(_val("Static Impressions / DAU", col, "#", 0)),
