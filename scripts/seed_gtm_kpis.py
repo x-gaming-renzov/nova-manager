@@ -151,6 +151,91 @@ def extract_business_data(ws) -> list[dict]:
     return rows
 
 
+def extract_assumptions(ws) -> dict:
+    """Extract simulation input assumptions from one Excel sheet.
+
+    Returns a dict matching the simulation engine's assumptions schema.
+    """
+    months_list = list(MONTH_COLS.values())  # 2026-07-01, ...
+
+    def _val(search_text: str, col: str, unit: str | None = None, default=0):
+        row = _find_row(ws, search_text, unit=unit)
+        if row is None:
+            return default
+        v = ws[f"{col}{row}"].value
+        return v if v is not None else default
+
+    col_letters = list(MONTH_COLS.keys())  # F, G, H, I, J, K
+
+    assumptions = {
+        "time_range": {"start_month": "2026-07", "end_month": "2026-12"},
+        "seed_values": {"active_tos": 0},
+        "months": {},
+    }
+
+    for i, (col, period) in enumerate(MONTH_COLS.items()):
+        month_key = period[:7]  # "2026-07"
+
+        # Marketing budgets by channel
+        budget_searches = [
+            ("social_channel",      "Agency Retainer"),
+            ("college_activation",  "Campus Ambassadors"),
+            ("kol_influencer",      "BGMI Streamers"),
+            ("seo_aso",             "Search & Store Optimization"),
+            ("bgmi_giveaways",      "UC Codes & Rewards"),
+            ("pr_media",            "Press Releases"),
+            ("marquee_tourney",     "BATTLIN BGMI Open"),
+        ]
+        budgets = {}
+        for channel, search in budget_searches:
+            row = _find_row(ws, search)
+            if row:
+                v = ws[f"{col}{row}"].value
+                if v and v > 0:
+                    budgets[channel] = float(v)
+
+        m = {
+            "new_tos_per_month": float(_val("New TO added", col, "#")),
+            "to_retention_rate": float(_val("Retention rate of Tos", col, default=0.87)),
+            "tournaments_per_to_per_month": float(_val("Tournaments / TO / Month", col, "#")),
+            "grimm_bot_tournaments": float(_val("Tounrmanents by GRIMM", col, default=0)),
+            "mau": float(_val("MAU", col, "#")),
+            "dau_mau_ratio": float(_val("DAU / MAU", col, "%")),
+            "pct_inorganic_players": float(_val("% Inorganic", col, "%")),
+            "player_cpi": float(_val("Player CPI", col, "$")),
+            "avg_teams_per_tournament": float(_val("Avg Teams / Tournament", col, "#", 16)),
+            "avg_players_per_team": float(_val("Avg Players / Team", col, "#", 4)),
+            "fill_rate": float(_val("Avg Fill Rate", col, "%")),
+            "milestone_reward_per_to_inr": float(_val("Avg Milestone Reward", col, default=3500)),
+            "leaderboard_pool_inr": float(_val("Monthly Leaderboard Pool", col, default=240000)),
+            "grand_prize_amortized_inr": float(_val("Amortized Grand Prize", col, default=300000)),
+            "initial_credit_per_to_inr": float(_val("Initial Credit / New TO", col, default=2000)),
+            "initial_credit_new_users_inr": float(_val("Initial Credit for new users", col, default=0)),
+            "r1_achievement_rate": float(_val("R1(10+TM)", col, default=0)),
+            "r2_achievement_rate": float(_val("R2(20+TM)", col, default=0)),
+            "usd_inr_rate": 90,
+            "marketing_budgets": budgets,
+            "ad_revenue": {
+                "static_impressions_per_dau": float(_val("Static Impressions / DAU", col, "#", 0)),
+                "interstitial_impressions_per_dau": float(_val("Interstitial Impressions / DAU", col, "#", 0)),
+                "video_impressions_per_dau": float(_val("Video Impressions / DAU", col, "#", 0)),
+                "ecpm_static": float(_val("eCPM Static", col, "$", 0)),
+                "ecpm_interstitial": float(_val("eCPM Interstitial", col, "$", 0)),
+                "ecpm_video": float(_val("eCPM Video", col, "$", 0)),
+                "ad_fill_rate": float(_val("Ad Fill Rate", col, "%", 0)),
+            },
+            "sponsorship": {
+                "active_deals": float(_val("Active Sponsor Deals", col, "#", 0)),
+                "avg_deal_value": float(_val("Avg Deal Value", col, "$", 0)),
+            },
+            "webshop_revenue": float(_val("Webshop Revenue", col, "$", 0)),
+        }
+
+        assumptions["months"][month_key] = m
+
+    return assumptions
+
+
 def extract_expected_values(ws) -> dict[str, dict[str, float]]:
     """Extract expected metric values from the Efficiency section for validation."""
     expected = {}
@@ -473,6 +558,8 @@ def main():
                         help="Ingest and validate all 4 Excel scenarios under one account")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print payloads without calling the API")
+    parser.add_argument("--via-simulation", action="store_true",
+                        help="Use the simulation API instead of direct business-data ingestion")
     args = parser.parse_args()
 
     base = args.base_url.rstrip("/")
@@ -491,7 +578,7 @@ def main():
     wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True)
 
     # Extract data for all requested sheets
-    scenario_data = {}  # {alias: {biz_data, expected, sheet_name}}
+    scenario_data = {}  # {alias: {biz_data, expected, sheet_name, assumptions?}}
     for alias, sheet_name in sheets_to_run:
         if sheet_name not in wb.sheetnames:
             print(f"ERROR: Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")
@@ -499,7 +586,10 @@ def main():
         ws = wb[sheet_name]
         biz_data = extract_business_data(ws)
         expected = extract_expected_values(ws)
-        scenario_data[alias] = {"biz_data": biz_data, "expected": expected, "sheet_name": sheet_name}
+        entry = {"biz_data": biz_data, "expected": expected, "sheet_name": sheet_name}
+        if args.via_simulation:
+            entry["assumptions"] = extract_assumptions(ws)
+        scenario_data[alias] = entry
 
     # ── Phase 1: Show extracted data ─────────────────────────
     for alias, sdata in scenario_data.items():
@@ -546,16 +636,48 @@ def main():
         sys.exit(1)
     headers = auth["headers"]
 
-    # ── Ingest each scenario ─────────────────────────────────
-    for alias, sdata in scenario_data.items():
-        scenario_id = f"scenario_{alias}"
-        biz_data = sdata["biz_data"]
+    # ── Ingest or Simulate each scenario ────────────────────
+    if args.via_simulation:
+        print(f"\n{'=' * 60}")
+        print(f"  Ingestion via Simulation API")
+        print(f"{'=' * 60}")
 
-        print(f"\n  Ingesting {len(biz_data)} rows as '{scenario_id}'...")
-        count = _ingest_scenario(api, headers, biz_data, scenario_id)
-        if count < 0:
-            sys.exit(1)
-        print(f"  OK    Ingested {count} rows")
+        for alias, sdata in scenario_data.items():
+            scenario_id = f"scenario_{alias}"
+            assumptions = sdata["assumptions"]
+
+            # Create simulation
+            r = requests.post(f"{api}/simulations/", headers=headers, json={
+                "name": f"GTM {alias} ({run_id})",
+                "description": f"Auto-generated from Excel sheet {sdata['sheet_name']}",
+                "scenario_id": scenario_id,
+                "assumptions": assumptions,
+            })
+            if r.status_code != 200:
+                print(f"  FAIL  Create simulation '{alias}': {r.status_code} — {r.text[:200]}")
+                sys.exit(1)
+            sim_id = r.json()["pid"]
+            print(f"\n  Created simulation '{alias}': {sim_id}")
+
+            # Run simulation
+            r = requests.post(f"{api}/simulations/{sim_id}/run/", headers=headers)
+            if r.status_code != 200:
+                print(f"  FAIL  Run simulation: {r.status_code} — {r.text[:200]}")
+                sys.exit(1)
+            run_data = r.json()
+            metrics = run_data["metrics_written"]
+            print(f"  OK    Ran simulation: {metrics} metrics written")
+
+    else:
+        for alias, sdata in scenario_data.items():
+            scenario_id = f"scenario_{alias}"
+            biz_data = sdata["biz_data"]
+
+            print(f"\n  Ingesting {len(biz_data)} rows as '{scenario_id}'...")
+            count = _ingest_scenario(api, headers, biz_data, scenario_id)
+            if count < 0:
+                sys.exit(1)
+            print(f"  OK    Ingested {count} rows")
 
     # ── Schema discovery ─────────────────────────────────────
     r = requests.get(f"{api}/metrics/business-data/schema/", headers=headers)
