@@ -70,7 +70,7 @@ async def get_simulation(
 ):
     crud = SimulationsCRUD(db)
     simulation = crud.get_by_pid(simulation_id)
-    if not simulation:
+    if not simulation or simulation.organisation_id != auth.organisation_id or simulation.app_id != auth.app_id:
         raise HTTPException(status_code=404, detail="Simulation not found")
     return simulation
 
@@ -84,7 +84,7 @@ async def update_simulation(
 ):
     crud = SimulationsCRUD(db)
     simulation = crud.get_by_pid(simulation_id)
-    if not simulation:
+    if not simulation or simulation.organisation_id != auth.organisation_id or simulation.app_id != auth.app_id:
         raise HTTPException(status_code=404, detail="Simulation not found")
 
     update_data = {}
@@ -110,7 +110,7 @@ async def delete_simulation(
 ):
     crud = SimulationsCRUD(db)
     simulation = crud.get_by_pid(simulation_id)
-    if not simulation:
+    if not simulation or simulation.organisation_id != auth.organisation_id or simulation.app_id != auth.app_id:
         raise HTTPException(status_code=404, detail="Simulation not found")
     crud.delete_by_pid(simulation_id)
     return {"success": True}
@@ -126,7 +126,7 @@ async def run_simulation(
     run_crud = SimulationRunsCRUD(db)
 
     simulation = sim_crud.get_by_pid(simulation_id)
-    if not simulation:
+    if not simulation or simulation.organisation_id != auth.organisation_id or simulation.app_id != auth.app_id:
         raise HTTPException(status_code=404, detail="Simulation not found")
 
     # Create run record with frozen assumptions
@@ -175,7 +175,7 @@ async def list_simulation_runs(
 ):
     sim_crud = SimulationsCRUD(db)
     simulation = sim_crud.get_by_pid(simulation_id)
-    if not simulation:
+    if not simulation or simulation.organisation_id != auth.organisation_id or simulation.app_id != auth.app_id:
         raise HTTPException(status_code=404, detail="Simulation not found")
 
     run_crud = SimulationRunsCRUD(db)
