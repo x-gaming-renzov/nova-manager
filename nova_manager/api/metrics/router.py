@@ -210,20 +210,25 @@ async def ingest_business_data(
         for item in request.data
     ]
     try:
-        controller.ingest_business_metrics(rows)
+        controller.ingest_business_metrics(rows, scenario_id=request.scenario_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"success": True, "count": len(rows)}
+    return {"success": True, "count": len(rows), "scenario_id": request.scenario_id}
 
 
 @router.get("/business-data/schema/")
 async def list_business_data_schema(
     auth: AuthContext = Depends(require_app_context),
+    scenario_id: str = Query(None, description="Filter to a specific scenario"),
 ):
-    """List distinct metric_name + dimension pairs from business_metrics table."""
+    """List distinct metric_name + dimension + scenario_id combinations from business_metrics table."""
     controller = EventsController(auth.organisation_id, auth.app_id)
     table = controller._business_metrics_table_name()
-    query = f"SELECT DISTINCT metric_name, dimension FROM {table} FINAL ORDER BY metric_name, dimension"
+    query = f"SELECT DISTINCT metric_name, dimension, scenario_id FROM {table} FINAL"
+    if scenario_id:
+        safe_scenario = QueryBuilder._sql_safe_identifier(scenario_id, "scenario_id")
+        query += f" WHERE scenario_id = '{safe_scenario}'"
+    query += " ORDER BY scenario_id, metric_name, dimension"
     try:
         result = ClickHouseService().run_query(query)
     except Exception:

@@ -81,6 +81,16 @@ class BusinessDataItem(BaseModel):
 
 class IngestBusinessDataRequest(BaseModel):
     data: List[BusinessDataItem] = Field(..., min_length=1)
+    scenario_id: str = Field(default="actuals", min_length=1, max_length=256)
+
+    @field_validator("scenario_id")
+    @classmethod
+    def scenario_id_must_be_safe(cls, v: str) -> str:
+        if not _SAFE_NAME_RE.match(v):
+            raise ValueError(
+                f"Only alphanumeric, underscore, hyphen, and dot characters allowed, got: {v!r}"
+            )
+        return v
 
 
 class EventsSchemaResponse(BaseModel):

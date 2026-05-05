@@ -314,11 +314,12 @@ class EventsController(EventsArtefacts):
             dimension String,
             value Float64,
             currency String DEFAULT '',
+            scenario_id String DEFAULT 'actuals',
             period_start DateTime64(3),
             created_at DateTime64(3)
         ) ENGINE = ReplacingMergeTree(created_at)
         PARTITION BY toYYYYMM(period_start)
-        ORDER BY (metric_name, dimension, period_start)
+        ORDER BY (metric_name, dimension, period_start, scenario_id)
         """
         try:
             ClickHouseService().create_table_if_not_exists(ddl)
@@ -330,7 +331,7 @@ class EventsController(EventsArtefacts):
             raise e
         return self._business_metrics_table_name()
 
-    def ingest_business_metrics(self, rows: list[dict]):
+    def ingest_business_metrics(self, rows: list[dict], scenario_id: str = "actuals"):
         time_now = datetime.now(timezone.utc)
         ch_rows = []
         for i, row in enumerate(rows):
@@ -344,6 +345,7 @@ class EventsController(EventsArtefacts):
                         "dimension": row.get("dimension", ""),
                         "value": value,
                         "currency": row.get("currency", ""),
+                        "scenario_id": row.get("scenario_id", scenario_id),
                         "period_start": row["period_start"],
                         "created_at": time_now.isoformat(),
                     }
