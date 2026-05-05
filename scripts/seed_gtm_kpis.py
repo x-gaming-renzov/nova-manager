@@ -102,10 +102,10 @@ METRICS_TO_EXTRACT = [
     ("webshop_revenue",         "Webshop Revenue (USD)",          "",                None),
     ("total_revenue",           "TOTAL REVENUE (USD)",            "",                None),
 
-    # Marketing budget by channel
-    ("marketing_spend",         "TO Incentives (L1+L2+L3) → derived", "to_empowerment", None),
+    # Marketing budget by channel (P-2 through P-8/O-3 only;
+    # P-1 TO Incentives and P-3 Sponsored Credits are already captured
+    # as separate metrics above, matching the simulation engine output)
     ("marketing_spend",         "Agency Retainer",                "social_channel",  None),
-    ("marketing_spend",         "Sponsored Credits → derived",    "prize_pools",     None),
     ("marketing_spend",         "Campus Ambassadors",             "college_activation", None),
     ("marketing_spend",         "BGMI Streamers",                 "kol_influencer",  None),
     ("marketing_spend",         "Search & Store Optimization",    "seo_aso",         None),
