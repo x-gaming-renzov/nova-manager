@@ -196,7 +196,7 @@ def extract_assumptions(ws) -> dict:
 
         m = {
             "new_tos_per_month": float(_val("New TO added", col, "#")),
-            "to_retention_rate": float(_val("Retention rate of Tos", col, default=0.87)),
+            "to_retention_rate": float(_val("Retention rate of Tos", col, default=1.0)),
             "tournaments_per_to_per_month": float(_val("Tournaments / TO / Month", col, "#")),
             "grimm_bot_tournaments": float(_val("Tounrmanents by GRIMM", col, default=0)),
             "mau": float(_val("MAU", col, "#")),
