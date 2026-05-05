@@ -104,3 +104,4 @@ Response
 | `time_range` | object or string | yes | `{"start": "...", "end": "..."}` or relative like `"6m"`, `"30d"`. |
 | `granularity` | string | yes | `hourly`, `daily`, `weekly`, `monthly`, or `none`. |
 | `group_by` | array | no | Use `[{"key": "dimension", "source": ""}]` to group by dimension. Only the `dimension` column is groupable for operational metrics. |
+| `scenario_id` | string | no | Filter to a specific scenario (e.g. `"actuals"`, `"scenario_v2"`). When omitted, data from all scenarios is aggregated together. |

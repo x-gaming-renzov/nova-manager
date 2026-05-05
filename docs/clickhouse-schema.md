@@ -165,11 +165,12 @@ CREATE TABLE business_metrics (
     dimension    String,
     value        Float64,
     currency     String DEFAULT '',
+    scenario_id  String DEFAULT 'actuals',
     period_start DateTime64(3),
     created_at   DateTime64(3)
 ) ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(period_start)
-ORDER BY (metric_name, dimension, period_start)
+ORDER BY (metric_name, dimension, period_start, scenario_id)
 ```
 
 | Column | Purpose |
@@ -178,10 +179,11 @@ ORDER BY (metric_name, dimension, period_start)
 | `dimension` | Breakdown key (e.g. `google_ads`, `facebook`, `tier_1`). Empty string if dimensionless. |
 | `value` | Numeric value (Float64). Must be finite. |
 | `currency` | Optional currency code (e.g. `USD`). |
+| `scenario_id` | Scenario identifier (e.g. `actuals`, `scenario_v2`, `scenario_neutral`). Defaults to `actuals`. |
 | `period_start` | Start of the period this value covers. |
 | `created_at` | Insertion timestamp. Used by ReplacingMergeTree to keep the latest row on dedup. |
 
-**ORDER BY** `(metric_name, dimension, period_start)` — this is also the dedup key. Re-inserting the same combination replaces the old row.
+**ORDER BY** `(metric_name, dimension, period_start, scenario_id)` — this is also the dedup key. The same metric+dimension+period can exist for multiple scenarios without overwriting. Re-inserting the same full combination replaces the old row.
 
 **Query pattern (with FINAL for dedup):**
 ```sql
