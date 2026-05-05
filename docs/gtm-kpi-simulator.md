@@ -363,20 +363,93 @@ Each month in the `assumptions.months` object supports these fields:
 
 ---
 
-## Seed script
+## Quick Tour
 
-A seed script is included that loads data from the Battlin GTM KPI Simulator Excel and validates all 9 KPIs end-to-end:
+Follow these steps to see the full feature in action, starting from zero.
+
+### 1. Start the stack
 
 ```bash
-# Single scenario
+docker-compose up -d          # ClickHouse
+uvicorn nova_manager.main:app --port 8000
+```
+
+### 2. Seed with the Excel (direct ingestion)
+
+Extracts business data from the Excel, ingests it, creates 9 formula KPIs, and validates each against the spreadsheet.
+
+```bash
 python3 -m scripts.seed_gtm_kpis --base-url http://localhost:8000 --sheet v2
+```
 
-# All 4 scenarios under one account
-python3 -m scripts.seed_gtm_kpis --base-url http://localhost:8000 --all-scenarios
+This creates a fresh account, ingests 152 data points as `scenario_v2`, saves 9 formula metrics (CAC, ROAS, ARPU, etc.), computes each one, and compares against the Excel. All 9 should PASS.
 
-# Via simulation API (creates simulation, runs engine, validates output)
+### 3. Seed via the simulation engine
+
+Same validation, but using the simulation API — assumptions are extracted from the Excel, a simulation is created, the engine runs the cascading calculations, and KPIs are computed from the engine output.
+
+```bash
 python3 -m scripts.seed_gtm_kpis --base-url http://localhost:8000 --sheet v2 --via-simulation
+```
 
-# Dry run
-python3 -m scripts.seed_gtm_kpis --dry-run --sheet v2
+### 4. All 4 scenarios at once
+
+Ingests all 4 Excel sheets (v2, neutral, positive, akshay) under one account with separate scenario_ids, validates each independently.
+
+```bash
+python3 -m scripts.seed_gtm_kpis --base-url http://localhost:8000 --all-scenarios
+```
+
+### 5. Create your own simulation
+
+Use the API directly with custom assumptions:
+
+```bash
+# Register + create app (or use existing auth)
+# Then:
+curl -X POST localhost:8000/api/v1/simulations/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "What if 500 TOs",
+    "scenario_id": "high_growth",
+    "assumptions": {
+      "time_range": {"start_month": "2026-07", "end_month": "2026-12"},
+      "seed_values": {"active_tos": 0},
+      "months": {
+        "2026-07": {"new_tos_per_month": 500, "to_retention_rate": 0.90, ...}
+      }
+    }
+  }'
+
+# Run it
+curl -X POST localhost:8000/api/v1/simulations/{id}/run/ \
+  -H "Authorization: Bearer $TOKEN"
+
+# Query a KPI
+curl -X POST localhost:8000/api/v1/metrics/compute/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "formula",
+    "config": {
+      "time_range": {"start": "2026-07-01 00:00:00", "end": "2027-01-01 00:00:00"},
+      "granularity": "monthly", "group_by": [],
+      "operands": {
+        "spend": {"type": "operational", "config": {"metric_name": "total_marketing_spend", "aggregation": "sum", "scenario_id": "high_growth"}},
+        "mau": {"type": "operational", "config": {"metric_name": "mau", "aggregation": "sum", "scenario_id": "high_growth"}}
+      },
+      "expression": "spend / mau"
+    }
+  }'
+```
+
+### 6. Run the test suite
+
+```bash
+# Unit tests (engine math, query builder, Excel verification — no server needed)
+python3 -m pytest tests/test_simulation_engine.py tests/test_simulation_vs_excel.py tests/test_operational_and_formula_queries.py -v
+
+# Integration tests (requires running server + ClickHouse + PostgreSQL)
+python3 -m scripts.smoke_test --base-url http://localhost:8000
 ```
