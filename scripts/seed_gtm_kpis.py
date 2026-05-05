@@ -125,6 +125,7 @@ EXPECTED_METRICS = [
     ("Revenue per Tournament",      "revenue_per_tournament"),
     ("Net Margin (Rev - Mkt Spend)","net_margin"),
     ("Margin %",                    "margin_pct"),
+    ("Demand CAC",                  "demand_cac"),
 ]
 
 
@@ -452,6 +453,7 @@ FORMULA_TO_EXPECTED = {
     "Supply CAC": "supply_cac",
     "Cost per Tournament": "cost_per_tournament",
     "Revenue per Tournament": "revenue_per_tournament",
+    "Demand CAC": "demand_cac",
 }
 
 PERIOD_LABELS = {
