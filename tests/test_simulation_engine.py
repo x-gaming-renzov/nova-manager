@@ -421,7 +421,7 @@ class TestOutputFormat:
 
     def test_period_format(self):
         for row in self.rows:
-            assert row["period_start"].endswith("T00:00:00")
+            assert row["period_start"].endswith("T00:00:00Z")
 
     def test_nonempty(self):
         assert len(self.rows) > 100  # ~20 metrics × 6 months + channel breakdowns

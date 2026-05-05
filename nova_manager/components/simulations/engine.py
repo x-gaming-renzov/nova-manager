@@ -39,7 +39,7 @@ def compute_simulation(assumptions: dict) -> list[dict]:
 
     for month in sorted_months:
         m = months_data[month]
-        period_start = f"{month}-01T00:00:00"
+        period_start = f"{month}-01T00:00:00Z"
         usd_inr = m.get("usd_inr_rate", 90)
 
         # ── Supply cascade ──────────────────────────────────
