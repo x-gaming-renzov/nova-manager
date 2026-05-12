@@ -7,6 +7,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from nova_manager.database.session import db_session
 from nova_manager.core.log import logger
 from nova_manager.service.clickhouse_service import ClickHouseService
+from nova_manager.service.analytics_factory import get_analytics_service
 
 from nova_manager.components.metrics.artefacts import EventsArtefacts
 from nova_manager.components.metrics.crud import EventsSchemaCRUD, UserProfileKeysCRUD
@@ -22,10 +23,64 @@ class TrackEvent(TypedDict):
 
 
 class EventsController(EventsArtefacts):
+    def __init__(self, organisation_id: str, app_id: str, analytics_backend: str = "clickhouse"):
+        super().__init__(organisation_id, app_id)
+        self.analytics_backend = analytics_backend
+
+    def _get_service(self):
+        return get_analytics_service(self.analytics_backend)
+
+    @property
+    def _adx_use_shared_db(self) -> bool:
+        """True when using the shared ADX database (no per-org/app DB yet)."""
+        from nova_manager.core.config import ADX_DATABASE
+        return bool(ADX_DATABASE)
+
+    _ADX_TABLE_MAP = {
+        "raw_events": "RawEvents",
+        "event_props": "EventProps",
+        "user_profile_props": "UserProfileProps",
+        "user_experience": "UserExperience",
+        "business_metrics": "BusinessMetrics",
+    }
+
+    def _adx_table_name(self, ch_table: str) -> str:
+        """Map ClickHouse table name to ADX table name. In shared-DB mode uses PascalCase."""
+        if self._adx_use_shared_db:
+            short = ch_table.split(".")[-1] if "." in ch_table else ch_table
+            return self._ADX_TABLE_MAP.get(short, short)
+        # Per-org/app DB: just use the short table name (no db prefix in KQL)
+        short = ch_table.split(".")[-1] if "." in ch_table else ch_table
+        return short
+
+    def _adx_enrich_rows(self, rows: list[dict]) -> list[dict]:
+        """Add organisation_id and app_id to rows when using shared-DB mode."""
+        if self._adx_use_shared_db:
+            for row in rows:
+                row["organisation_id"] = self.organisation_id
+                row["app_id"] = self.app_id
+        return rows
+
     def create_database(self):
+        if self.analytics_backend == "adx":
+            if self._adx_use_shared_db:
+                logger.info("ADX: using shared database, skipping DB creation")
+                return
+            # Per-org/app DB mode
+            self._get_service().execute(f".create database ['{self.database_name}'] volatile")
+            return
         ClickHouseService().create_database_if_not_exists(self.database_name)
 
     def create_raw_events_table(self):
+        if self.analytics_backend == "adx":
+            if self._adx_use_shared_db:
+                return self._adx_table_name(self._raw_events_table_name())
+            self._get_service().execute(
+                f".create table ['{self._raw_events_table_name()}'] "
+                f"(event_id: string, user_id: string, event_name: string, "
+                f"event_data: dynamic, client_ts: datetime, server_ts: datetime)"
+            )
+            return self._raw_events_table_name()
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._raw_events_table_name()} (
             event_id String,
@@ -42,6 +97,15 @@ class EventsController(EventsArtefacts):
         return self._raw_events_table_name()
 
     def create_event_props_table(self):
+        if self.analytics_backend == "adx":
+            if self._adx_use_shared_db:
+                return self._adx_table_name(self._event_props_table_name())
+            self._get_service().execute(
+                f".create table ['{self._event_props_table_name()}'] "
+                f"(event_id: string, user_id: string, event_name: string, "
+                f"key: string, value: string, client_ts: datetime, server_ts: datetime)"
+            )
+            return self._event_props_table_name()
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._event_props_table_name()} (
             event_id String,
@@ -59,6 +123,14 @@ class EventsController(EventsArtefacts):
         return self._event_props_table_name()
 
     def create_user_profile_table(self):
+        if self.analytics_backend == "adx":
+            if self._adx_use_shared_db:
+                return self._adx_table_name(self._user_profile_props_table_name())
+            self._get_service().execute(
+                f".create table ['{self._user_profile_props_table_name()}'] "
+                f"(user_id: string, key: string, value: string, server_ts: datetime)"
+            )
+            return self._user_profile_props_table_name()
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._user_profile_props_table_name()} (
             user_id String,
@@ -81,6 +153,16 @@ class EventsController(EventsArtefacts):
         return self._user_profile_props_table_name()
 
     def create_user_experience_table(self):
+        if self.analytics_backend == "adx":
+            if self._adx_use_shared_db:
+                return self._adx_table_name(self._user_experience_table_name())
+            self._get_service().execute(
+                f".create table ['{self._user_experience_table_name()}'] "
+                f"(user_id: string, experience_id: string, personalisation_id: string, "
+                f"personalisation_name: string, experience_variant_id: string, "
+                f"features: dynamic, evaluation_reason: string, assigned_at: datetime)"
+            )
+            return self._user_experience_table_name()
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._user_experience_table_name()} (
             user_id String,
@@ -103,23 +185,32 @@ class EventsController(EventsArtefacts):
 
         return self._user_experience_table_name()
 
-    def push_to_clickhouse(
+    def push_to_analytics(
         self,
         raw_events_rows: list[dict],
         event_props_rows: list[dict],
     ):
         try:
-            ch = ClickHouseService()
+            svc = self._get_service()
+            is_adx = self.analytics_backend == "adx"
 
             if raw_events_rows:
-                ch.insert_rows(self._raw_events_table_name(), raw_events_rows)
+                rows = self._adx_enrich_rows(raw_events_rows) if is_adx else raw_events_rows
+                table = self._adx_table_name(self._raw_events_table_name()) if is_adx else self._raw_events_table_name()
+                svc.insert_rows(table, rows)
 
             if event_props_rows:
-                ch.insert_rows(self._event_props_table_name(), event_props_rows)
+                rows = self._adx_enrich_rows(event_props_rows) if is_adx else event_props_rows
+                table = self._adx_table_name(self._event_props_table_name()) if is_adx else self._event_props_table_name()
+                svc.insert_rows(table, rows)
 
         except Exception as e:
-            logger.error(f"ClickHouse insertion failed: {str(e)}")
+            logger.error(f"Analytics insertion failed: {str(e)}")
             raise e
+
+    # Keep old name as alias for backwards compatibility with queued jobs
+    def push_to_clickhouse(self, raw_events_rows: list[dict], event_props_rows: list[dict]):
+        return self.push_to_analytics(raw_events_rows, event_props_rows)
 
     def track_events(self, user_id: str, events: list[TrackEvent]):
         logger.info(
@@ -266,9 +357,10 @@ class EventsController(EventsArtefacts):
             "assigned_at": user_experience.assigned_at.isoformat() if user_experience.assigned_at else datetime.now(timezone.utc).isoformat(),
         }
 
-        ClickHouseService().insert_rows(
-            self._user_experience_table_name(), [user_experience_row]
-        )
+        is_adx = self.analytics_backend == "adx"
+        rows = self._adx_enrich_rows([user_experience_row]) if is_adx else [user_experience_row]
+        table = self._adx_table_name(self._user_experience_table_name()) if is_adx else self._user_experience_table_name()
+        self._get_service().insert_rows(table, rows)
 
     def track_user_profile(self, user_id: str, old_profile: dict, user_profile: dict):
         changed_profile = {
@@ -303,11 +395,29 @@ class EventsController(EventsArtefacts):
                 for key in changed_profile
             ]
 
-            ClickHouseService().insert_rows(
-                self._user_profile_props_table_name(), user_profile_rows
-            )
+            is_adx = self.analytics_backend == "adx"
+            rows = self._adx_enrich_rows(user_profile_rows) if is_adx else user_profile_rows
+            table = self._adx_table_name(self._user_profile_props_table_name()) if is_adx else self._user_profile_props_table_name()
+            self._get_service().insert_rows(table, rows)
 
     def create_business_metrics_table(self):
+        if self.analytics_backend == "adx":
+            if self._adx_use_shared_db:
+                return self._adx_table_name(self._business_metrics_table_name())
+            try:
+                self._get_service().execute(
+                    f".create table ['{self._business_metrics_table_name()}'] "
+                    f"(metric_name: string, dimension: string, value: real, "
+                    f"currency: string, scenario_id: string, period_start: datetime, "
+                    f"created_at: datetime)"
+                )
+                logger.info(
+                    f"Business metrics table created/confirmed (ADX): {self._business_metrics_table_name()}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to create business metrics table (ADX): {str(e)}")
+                raise e
+            return self._business_metrics_table_name()
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._business_metrics_table_name()} (
             metric_name String,
@@ -355,11 +465,12 @@ class EventsController(EventsArtefacts):
                 raise ValueError(f"Invalid row at index {i}: {e}") from e
 
         try:
-            ClickHouseService().insert_rows(
-                self._business_metrics_table_name(), ch_rows
-            )
+            is_adx = self.analytics_backend == "adx"
+            rows = self._adx_enrich_rows(ch_rows) if is_adx else ch_rows
+            table = self._adx_table_name(self._business_metrics_table_name()) if is_adx else self._business_metrics_table_name()
+            self._get_service().insert_rows(table, rows)
         except Exception as e:
-            logger.error(f"ClickHouse insertion failed for business metrics: {e}")
+            logger.error(f"Analytics insertion failed for business metrics: {e}")
             raise
 
     @staticmethod
@@ -367,15 +478,22 @@ class EventsController(EventsArtefacts):
         """Escape a value for safe embedding in a ClickHouse string literal."""
         return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
+    def reconcile_user(self, anonymous_id: str, identified_id: str):
+        """Re-key anon rows → identified user across all analytics tables."""
+        if self.analytics_backend == "adx":
+            return self._reconcile_user_adx(anonymous_id, identified_id)
+        return self._reconcile_user_clickhouse(anonymous_id, identified_id)
+
+    # Keep old name as alias for backwards compatibility with queued jobs
     def reconcile_user_in_clickhouse(self, anonymous_id: str, identified_id: str):
+        return self.reconcile_user(anonymous_id, identified_id)
+
+    def _reconcile_user_clickhouse(self, anonymous_id: str, identified_id: str):
         """Re-key anon rows → identified user in ClickHouse.
 
         user_id is part of the ORDER BY key in MergeTree tables, so it
         cannot be updated in-place.  Instead we INSERT … SELECT with the
         new user_id and then DELETE the old rows.
-
-        Uses ``* REPLACE(... AS user_id)`` so that column positions are
-        preserved regardless of where ``user_id`` appears in the schema.
         """
         safe_anon = self._escape_ch_string(anonymous_id)
         safe_identified = self._escape_ch_string(identified_id)
@@ -390,11 +508,6 @@ class EventsController(EventsArtefacts):
         completed_tables = []
         for table in tables:
             try:
-                # 1. Copy rows with the new user_id.
-                #    * REPLACE keeps every column in its original position
-                #    and swaps only the named column's value, avoiding the
-                #    silent column-shift that * EXCEPT would cause when
-                #    user_id is not the first column.
                 insert_stmt = (
                     f"INSERT INTO {table} "
                     f"SELECT * REPLACE('{safe_identified}' AS user_id) "
@@ -402,7 +515,6 @@ class EventsController(EventsArtefacts):
                 )
                 ch.execute(insert_stmt)
 
-                # 2. Remove the old anon rows (async mutation in ClickHouse)
                 delete_stmt = (
                     f"ALTER TABLE {table} DELETE "
                     f"WHERE user_id = '{safe_anon}'"
@@ -416,3 +528,50 @@ class EventsController(EventsArtefacts):
                     f"anon={anonymous_id}, identified={identified_id}): {e}"
                 )
                 raise
+
+    def _reconcile_user_adx(self, anonymous_id: str, identified_id: str):
+        """Re-key anon rows → identified user in ADX.
+
+        ADX does not support in-place updates. We use .delete to soft-delete
+        old rows and ingest new rows with the updated user_id.
+        """
+        safe_anon = self._escape_kql_string(anonymous_id)
+        safe_identified = self._escape_kql_string(identified_id)
+
+        svc = self._get_service()
+        tables = [
+            self._raw_events_table_name(),
+            self._event_props_table_name(),
+            self._user_profile_props_table_name(),
+            self._user_experience_table_name(),
+        ]
+        completed_tables = []
+        for table in tables:
+            try:
+                # 1. Query existing rows for the anonymous user
+                query = f"{table} | where user_id == '{safe_anon}'"
+                rows = svc.run_query(query)
+
+                if rows:
+                    # 2. Re-insert with identified user_id
+                    for row in rows:
+                        row["user_id"] = identified_id
+                    svc.insert_rows(table, rows)
+
+                    # 3. Soft-delete the old rows
+                    svc.execute(
+                        f".delete table {table} records <| "
+                        f"{table} | where user_id == '{safe_anon}'"
+                    )
+                completed_tables.append(table)
+            except Exception as e:
+                logger.error(
+                    f"reconcile_user_adx failed for {table} "
+                    f"(completed {len(completed_tables)}/{len(tables)} tables, "
+                    f"anon={anonymous_id}, identified={identified_id}): {e}"
+                )
+                raise
+
+    @staticmethod
+    def _escape_kql_string(value: str) -> str:
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
