@@ -338,8 +338,9 @@ class TestKQLFormulaQuery:
         })
         assert "let op_spend" in kql
         assert "let op_mau" in kql
-        # Safe division with iff
-        assert "iff(op_mau.value == 0, real(null), op_mau.value)" in kql
+        # After join: first operand's value = "value", second = "value1"
+        # Safe division wraps the denominator with todouble for type safety
+        assert "iff(todouble(value1) == 0, real(null), todouble(value1))" in kql
 
     def test_subtraction(self):
         kql = _qb().build_query("formula", {
@@ -351,7 +352,7 @@ class TestKQLFormulaQuery:
             },
             "expression": "revenue - spend",
         })
-        assert "op_revenue.value - op_spend.value" in kql
+        assert "value - value1" in kql
 
     def test_no_formula_nesting(self):
         with pytest.raises(ValueError, match="cannot be of type 'formula'"):
@@ -412,7 +413,7 @@ class TestKQLExpressionParser:
 
     def test_division_wraps_iff(self):
         result = KQLQueryBuilder._safe_parse_expression("a / b", ["a", "b"])
-        assert "iff(op_b.value == 0, real(null), op_b.value)" in result
+        assert "iff(todouble(op_b.value) == 0, real(null), todouble(op_b.value))" in result
 
     def test_allows_valid_expression(self):
         result = KQLQueryBuilder._safe_parse_expression("a + b", ["a", "b"])

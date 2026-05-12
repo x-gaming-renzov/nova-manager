@@ -471,6 +471,21 @@ class KQLQueryBuilder(EventsArtefacts):
         else:
             group_by_keys = [item["key"] for item in group_by]
 
+        # In KQL, after joins the "value" column from each table gets suffixed:
+        # first table: value, second: value1, third: value2, etc.
+        # Build a mapping from op_{name}.value -> the positional column name.
+        value_col_map = {}
+        for idx, name in enumerate(operand_names):
+            if idx == 0:
+                value_col_map[f"op_{name}.value"] = "value"
+            else:
+                value_col_map[f"op_{name}.value"] = f"value{idx}"
+
+        # Rewrite the expression to use positional column names
+        kql_expr = safe_expr
+        for ref, col in value_col_map.items():
+            kql_expr = kql_expr.replace(ref, col)
+
         lines = list(let_parts)
         lines.append(f"op_{first_name}")
 
@@ -484,8 +499,7 @@ class KQLQueryBuilder(EventsArtefacts):
             )
 
         # Project final result
-        # After joins, value columns get suffixed: value, value1, value2, etc.
-        project_parts = ["period"] + group_by_keys + [f"value = {safe_expr}"]
+        project_parts = ["period"] + group_by_keys + [f"value = {kql_expr}"]
         lines.append(f"| project {', '.join(project_parts)}")
         lines.append(f"| order by period asc")
 
@@ -751,7 +765,7 @@ class KQLQueryBuilder(EventsArtefacts):
                 result_tokens.append("/")
 
                 if next_token.startswith("op_"):
-                    result_tokens.append(f"iff({next_token} == 0, real(null), {next_token})")
+                    result_tokens.append(f"iff(todouble({next_token}) == 0, real(null), todouble({next_token}))")
                     i += 2
                 elif next_token == "(":
                     paren_depth = 0
@@ -767,10 +781,10 @@ class KQLQueryBuilder(EventsArtefacts):
                             break
                         j += 1
                     inner = " ".join(sub_tokens[1:-1])
-                    result_tokens.append(f"iff(( {inner} ) == 0, real(null), ( {inner} ))")
+                    result_tokens.append(f"iff(todouble(( {inner} )) == 0, real(null), todouble(( {inner} )))")
                     i = j + 1
                 else:
-                    result_tokens.append(f"iff({next_token} == 0, real(null), {next_token})")
+                    result_tokens.append(f"iff(todouble({next_token}) == 0, real(null), todouble({next_token}))")
                     i += 2
             else:
                 result_tokens.append(validated_tokens[i])
