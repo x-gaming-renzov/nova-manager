@@ -1,0 +1,1 @@
+- [Commit style](feedback_commit_style.md) — granular commits, no co-author, tests separate, short messages

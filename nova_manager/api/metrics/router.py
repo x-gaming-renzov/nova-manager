@@ -1,3 +1,4 @@
+import copy
 from typing import Dict, List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -5,6 +6,7 @@ from nova_manager.api.metrics.request_response import (
     CreateMetricRequest,
     ComputeMetricRequest,
     EventsSchemaResponse,
+    IngestBusinessDataRequest,
     MetricResponse,
     TrackEventRequest,
     TrackEventsRequest,
@@ -82,9 +84,8 @@ async def compute_metric(
     organisation_id = auth.organisation_id
     app_id = auth.app_id
     type = compute_request.type
-    # copy config and extract any segment filters embedded in filters
-    # copy config and extract filters
-    config = compute_request.config.copy()
+    # deep-copy config so mutations (pop, filter merging) don't leak
+    config = copy.deepcopy(compute_request.config)
     filters = config.get("filters", {}) or {}
     # extract explicit segment_ids list from config
     config_segment_ids = config.pop("segment_ids", []) or []
@@ -188,6 +189,52 @@ async def list_user_profile_keys(
         )
 
     return user_profile_keys
+
+
+@router.post("/business-data/")
+async def ingest_business_data(
+    request: IngestBusinessDataRequest,
+    auth: AuthContext = Depends(require_app_context),
+):
+    """Ingest operational/business data (marketing spend, payouts, revenue, etc.)."""
+    controller = EventsController(auth.organisation_id, auth.app_id)
+    controller.create_business_metrics_table()
+    rows = [
+        {
+            "metric_name": item.metric_name,
+            "dimension": item.dimension,
+            "value": item.value,
+            "period_start": item.period_start.isoformat(),
+            "currency": item.currency,
+        }
+        for item in request.data
+    ]
+    try:
+        controller.ingest_business_metrics(rows, scenario_id=request.scenario_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"success": True, "count": len(rows), "scenario_id": request.scenario_id}
+
+
+@router.get("/business-data/schema/")
+async def list_business_data_schema(
+    auth: AuthContext = Depends(require_app_context),
+    scenario_id: str = Query(None, description="Filter to a specific scenario"),
+):
+    """List distinct metric_name + dimension + scenario_id combinations from business_metrics table."""
+    controller = EventsController(auth.organisation_id, auth.app_id)
+    table = controller._business_metrics_table_name()
+    query = f"SELECT DISTINCT metric_name, dimension, scenario_id FROM {table} FINAL"
+    if scenario_id:
+        safe_scenario = QueryBuilder._sql_safe_identifier(scenario_id, "scenario_id")
+        query += f" WHERE scenario_id = '{safe_scenario}'"
+    query += " ORDER BY scenario_id, metric_name, dimension"
+    try:
+        result = ClickHouseService().run_query(query)
+    except Exception:
+        # Table may not exist yet if no business data has been ingested
+        return []
+    return result
 
 
 @router.post("/")

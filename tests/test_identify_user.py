@@ -543,10 +543,36 @@ class TestEventsControllerReconcile:
             controller = EventsController(TEST_ORG_ID, TEST_APP_ID)
             controller.reconcile_user_in_clickhouse("anon-xyz", "id-xyz")
 
-            assert mock_ch.execute.call_count == 4
+            # 4 tables × 2 calls each (INSERT … SELECT + ALTER TABLE DELETE)
+            assert mock_ch.execute.call_count == 8
 
             calls = [c.args[0] for c in mock_ch.execute.call_args_list]
-            for call_stmt in calls:
-                assert "anon-xyz" in call_stmt
-                assert "id-xyz" in call_stmt
-                assert "ALTER TABLE" in call_stmt
+            insert_calls = [c for c in calls if c.startswith("INSERT")]
+            delete_calls = [c for c in calls if c.startswith("ALTER TABLE")]
+            assert len(insert_calls) == 4
+            assert len(delete_calls) == 4
+            for stmt in insert_calls:
+                assert "anon-xyz" in stmt
+                assert "id-xyz" in stmt
+            for stmt in delete_calls:
+                assert "anon-xyz" in stmt
+
+    async def test_reconcile_user_escapes_sql_injection(self):
+        with patch(
+            "nova_manager.components.metrics.events_controller.ClickHouseService"
+        ) as MockCH:
+            mock_ch = MagicMock()
+            MockCH.return_value = mock_ch
+
+            controller = EventsController(TEST_ORG_ID, TEST_APP_ID)
+            controller.reconcile_user_in_clickhouse(
+                "' OR '1'='1", "id'; DROP TABLE x; --"
+            )
+
+            calls = [c.args[0] for c in mock_ch.execute.call_args_list]
+            for stmt in calls:
+                # Raw unescaped quotes must not appear — they'd break out of the literal
+                assert "' OR '1'='1" not in stmt
+                assert "id'; DROP" not in stmt
+                # Escaped quotes should be present instead
+                assert "\\'" in stmt

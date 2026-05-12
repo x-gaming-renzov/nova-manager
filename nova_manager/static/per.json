@@ -1,0 +1,74 @@
+[
+    {
+        "pid": "e73600e8-72c4-4d81-8198-2c6f1c2d228d",
+        "name": "Superman from USA",
+        "description": "Fast progression for US players",
+        "experience_id": "8ef9ff23-b86b-40a9-97a9-93733ddad159",
+        "priority": 1,
+        "rollout_percentage": 100,
+        "rule_config": {
+            "conditions": [
+                {
+                    "field": "country",
+                    "operator": "equals",
+                    "value": "United States",
+                    "type": "text"
+                }
+            ]
+        },
+        "is_active": true,
+        "experience_variants": [
+            {
+                "pid": "57cc3de8-f6ff-40dd-8d0f-5fb125bd6dc1",
+                "target_percentage": 100,
+                "experience_variant": {
+                    "pid": "ee0f99f5-8bb2-438c-a87e-259e5237b624",
+                    "name": "v1",
+                    "description": "d1",
+                    "is_default": false,
+                    "last_updated_at": "2025-09-15T10:32:12.718019Z",
+                    "feature_variants": [
+                        {
+                            "pid": "4a938323-9b20-459d-9463-cb1918ec7c89",
+                            "experience_feature_id": "8ef015f5-4cf0-458c-b2a3-c9aa6e4b5809",
+                            "name": "f1",
+                            "config": {
+                                "starting_health_multiplier": 0,
+                                "starting_movement_speed": 1,
+                                "exp_to_level_multiplier": 1,
+                                "ability_drop_rarity_weights": 1
+                            }
+                        },
+                        {
+                            "pid": "4eaca004-d5a6-40c5-b095-4ed2b87d595e",
+                            "experience_feature_id": "9f82141a-3afc-457b-b3aa-cfc410bf41ba",
+                            "name": "gbf1",
+                            "config": {
+                                "monster_spawn_rate_multiplier": 1,
+                                "monster_health_multiplier": 1,
+                                "monster_damage_multiplier": 1,
+                                "exp_gem_drop_rate": 1,
+                                "coin_drop_rate": 1,
+                                "NewProperty6": "1"
+                            }
+                        },
+                        {
+                            "pid": "23f340b0-b49b-43d8-ad17-af5a73c74bf2",
+                            "experience_feature_id": "0a218a67-c169-46aa-a30b-7c584dcf0149",
+                            "name": "cf1",
+                            "config": {
+                                "player_damage_multiplier": 1,
+                                "knockback_strength": 1,
+                                "armor_effectiveness": 2,
+                                "healing_effectiveness": 1,
+                                "armor_effectivness": 1
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "metrics": [],
+        "segment_rules": []
+    }
+]

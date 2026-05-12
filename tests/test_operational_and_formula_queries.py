@@ -1,0 +1,867 @@
+"""Unit tests for operational and formula metric types in QueryBuilder.
+
+These test SQL generation only — no ClickHouse connection needed.
+"""
+
+import pytest
+import re
+
+from nova_manager.components.metrics.query_builder import QueryBuilder
+
+
+ORG_ID = "test_org"
+APP_ID = "test_app"
+
+
+def qb():
+    return QueryBuilder(ORG_ID, APP_ID)
+
+
+# ── Operational metric tests ─────────────────────────────────
+
+
+class TestOperationalQuery:
+    def test_basic_sum(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "business_metrics FINAL" in sql
+        assert "SUM(value) AS value" in sql
+        assert "metric_name = 'marketing_spend'" in sql
+        assert "toStartOfMonth(period_start) AS period" in sql
+        assert "GROUP BY period" in sql
+        assert "ORDER BY period" in sql
+
+    def test_avg_aggregation(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "cpi",
+                "aggregation": "avg",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "daily",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "AVG(value) AS value" in sql
+        assert "toStartOfDay(period_start) AS period" in sql
+
+    def test_dimension_filter(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "dimension_filter": "google_ads",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "dimension = 'google_ads'" in sql
+
+    def test_group_by_dimension(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [{"key": "dimension", "source": ""}],
+                "filters": {},
+            },
+        )
+        assert "dimension" in sql
+        assert "GROUP BY period, dimension" in sql
+
+    def test_uses_correct_table(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "sponsorship_revenue",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "org_test_org_app_test_app.business_metrics" in sql
+        # Should NOT reference raw_events
+        assert "raw_events" not in sql
+
+    def test_no_user_id_in_query(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "user_id" not in sql
+
+    def test_relative_time_range(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "time_range": "6m",
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "period_start >=" in sql
+        assert "period_start <" in sql
+
+    def test_weekly_granularity(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "weekly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "toMonday(period_start) AS period" in sql
+
+    def test_min_max_aggregations(self):
+        for agg in ("min", "max"):
+            sql = qb().build_query(
+                "operational",
+                {
+                    "metric_name": "deal_value",
+                    "aggregation": agg,
+                    "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                    "granularity": "monthly",
+                    "group_by": [],
+                    "filters": {},
+                },
+            )
+            assert f"{agg.upper()}(value) AS value" in sql
+
+    def test_filters_applied_to_dimension(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {"dimension": {"value": "google_ads", "source": "", "op": "="}},
+            },
+        )
+        assert "dimension = 'google_ads'" in sql
+
+    def test_filters_applied_to_currency(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "revenue",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {"currency": {"value": "USD", "source": "", "op": "="}},
+            },
+        )
+        assert "currency = 'USD'" in sql
+
+    def test_irrelevant_filters_skipped(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "revenue",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {"country": {"value": "US", "source": "user_profile", "op": "="}},
+            },
+        )
+        assert "country" not in sql
+
+    def test_group_by_currency(self):
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "revenue",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [{"key": "currency", "source": ""}],
+                "filters": {},
+            },
+        )
+        assert "GROUP BY period, currency" in sql
+
+
+# ── Ratio metric tests ──────────────────────────────────────
+
+
+class TestRatioQuery:
+    def test_default_counts_events(self):
+        sql = qb().build_query(
+            "ratio",
+            {
+                "numerator": {"event_name": "purchase"},
+                "denominator": {"event_name": "page_view"},
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "COUNT(*)" in sql
+        assert "uniqExact" not in sql
+
+    def test_distinct_counts_unique_users(self):
+        sql = qb().build_query(
+            "ratio",
+            {
+                "numerator": {"event_name": "purchase", "distinct": True},
+                "denominator": {"event_name": "page_view", "distinct": True},
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "uniqExact" in sql
+        assert "COUNT(*)" not in sql
+
+
+# ── Formula metric tests ─────────────────────────────────────
+
+
+class TestFormulaQuery:
+    def test_basic_division_two_operands(self):
+        """CAC = spend / MAU"""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "spend": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "marketing_spend",
+                            "aggregation": "sum",
+                        },
+                    },
+                    "mau": {
+                        "type": "count",
+                        "config": {
+                            "event_name": "session_start",
+                            "distinct": True,
+                        },
+                    },
+                },
+                "expression": "spend / mau",
+            },
+        )
+        # Should have CTEs
+        assert "WITH" in sql
+        assert "op_spend AS" in sql
+        assert "op_mau AS" in sql
+        # Division with nullIf
+        assert "nullIf(op_mau.value, 0)" in sql
+        # JOIN on period
+        assert "op_spend.period = op_mau.period" in sql
+        # Operational CTE uses business_metrics
+        assert "business_metrics FINAL" in sql
+        # Count CTE uses raw_events
+        assert "raw_events" in sql
+
+    def test_subtraction(self):
+        """Net Margin = revenue - spend"""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "revenue": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "total_revenue",
+                            "aggregation": "sum",
+                        },
+                    },
+                    "spend": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "marketing_spend",
+                            "aggregation": "sum",
+                        },
+                    },
+                },
+                "expression": "revenue - spend",
+            },
+        )
+        assert "op_revenue.value - op_spend.value" in sql
+
+    def test_multiplication(self):
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "a": {
+                        "type": "operational",
+                        "config": {"metric_name": "x", "aggregation": "sum"},
+                    },
+                    "b": {
+                        "type": "operational",
+                        "config": {"metric_name": "y", "aggregation": "sum"},
+                    },
+                },
+                "expression": "a * b",
+            },
+        )
+        assert "op_a.value * op_b.value" in sql
+
+    def test_complex_expression_with_parens(self):
+        """ROAS with constant: (revenue - spend) / spend"""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "revenue": {
+                        "type": "operational",
+                        "config": {"metric_name": "total_revenue", "aggregation": "sum"},
+                    },
+                    "spend": {
+                        "type": "operational",
+                        "config": {"metric_name": "marketing_spend", "aggregation": "sum"},
+                    },
+                },
+                "expression": "(revenue - spend) / spend",
+            },
+        )
+        assert "( op_revenue.value - op_spend.value )" in sql
+        assert "nullIf(op_spend.value, 0)" in sql
+
+    def test_formula_overrides_time_range(self):
+        """Formula's time_range should override operand configs."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-06-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "spend": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "marketing_spend",
+                            "aggregation": "sum",
+                            "time_range": {"start": "2000-01-01", "end": "2000-12-31"},
+                        },
+                    },
+                    "mau": {
+                        "type": "count",
+                        "config": {
+                            "event_name": "login",
+                            "distinct": True,
+                            "time_range": {"start": "2000-01-01", "end": "2000-12-31"},
+                        },
+                    },
+                },
+                "expression": "spend / mau",
+            },
+        )
+        # Formula time_range should be used, not the operand's
+        assert "2026-06-01" in sql
+        assert "2026-07-01" in sql
+        # Operand's time_range should NOT appear
+        assert "2000-01-01" not in sql
+
+    def test_formula_with_aggregation_operand(self):
+        """Revenue per tournament: revenue / avg_participants."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "revenue": {
+                        "type": "operational",
+                        "config": {"metric_name": "total_revenue", "aggregation": "sum"},
+                    },
+                    "tournaments": {
+                        "type": "count",
+                        "config": {"event_name": "tournament.created", "distinct": False},
+                    },
+                },
+                "expression": "revenue / tournaments",
+            },
+        )
+        assert "op_revenue AS" in sql
+        assert "op_tournaments AS" in sql
+        assert "nullIf(op_tournaments.value, 0)" in sql
+
+    def test_three_operands(self):
+        """(revenue - spend) / mau"""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "revenue": {
+                        "type": "operational",
+                        "config": {"metric_name": "total_revenue", "aggregation": "sum"},
+                    },
+                    "spend": {
+                        "type": "operational",
+                        "config": {"metric_name": "marketing_spend", "aggregation": "sum"},
+                    },
+                    "mau": {
+                        "type": "count",
+                        "config": {"event_name": "session_start", "distinct": True},
+                    },
+                },
+                "expression": "(revenue - spend) / mau",
+            },
+        )
+        assert "op_revenue AS" in sql
+        assert "op_spend AS" in sql
+        assert "op_mau AS" in sql
+        # Two JOINs
+        assert sql.count("JOIN op_") == 2
+
+    def test_numeric_literal_in_expression(self):
+        """spend * 100 / mau"""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "spend": {
+                        "type": "operational",
+                        "config": {"metric_name": "marketing_spend", "aggregation": "sum"},
+                    },
+                    "mau": {
+                        "type": "count",
+                        "config": {"event_name": "session_start", "distinct": True},
+                    },
+                },
+                "expression": "spend * 100 / mau",
+            },
+        )
+        assert "100" in sql
+        assert "op_spend.value * 100" in sql
+
+    def test_mixed_operands_non_dimension_group_by(self):
+        """Operational operand should not emit columns it doesn't support."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [{"key": "country", "source": "user_profile"}],
+                "operands": {
+                    "spend": {
+                        "type": "operational",
+                        "config": {"metric_name": "spend", "aggregation": "sum"},
+                    },
+                    "mau": {
+                        "type": "count",
+                        "config": {"event_name": "login", "distinct": True},
+                    },
+                },
+                "expression": "spend / mau",
+            },
+        )
+        # operational CTE must not reference 'country' (it only supports 'dimension')
+        assert "op_spend.country" not in sql
+        # count CTE should still have country
+        assert "val_country.value AS country" in sql
+
+    def test_operational_dimension_group_by_in_formula(self):
+        """dimension group_by should work for operational operands in formulas."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [{"key": "dimension", "source": ""}],
+                "operands": {
+                    "a": {
+                        "type": "operational",
+                        "config": {"metric_name": "x", "aggregation": "sum"},
+                    },
+                    "b": {
+                        "type": "operational",
+                        "config": {"metric_name": "y", "aggregation": "sum"},
+                    },
+                },
+                "expression": "a / b",
+            },
+        )
+        assert "GROUP BY period, dimension" in sql
+
+
+# ── Expression parser safety tests ───────────────────────────
+
+
+class TestExpressionParser:
+    def test_rejects_sql_injection(self):
+        with pytest.raises(ValueError, match="Invalid token"):
+            QueryBuilder._safe_parse_expression(
+                "; DROP TABLE users", ["spend", "mau"]
+            )
+
+    def test_rejects_unknown_operand(self):
+        with pytest.raises(ValueError, match="Invalid token.*unknown_metric"):
+            QueryBuilder._safe_parse_expression(
+                "spend / unknown_metric", ["spend", "mau"]
+            )
+
+    def test_rejects_sql_keywords(self):
+        with pytest.raises(ValueError):
+            QueryBuilder._safe_parse_expression(
+                "SELECT * FROM users", ["spend"]
+            )
+
+    def test_rejects_semicolons(self):
+        with pytest.raises(ValueError):
+            QueryBuilder._safe_parse_expression(
+                "spend; DROP", ["spend"]
+            )
+
+    def test_rejects_comments(self):
+        with pytest.raises(ValueError):
+            QueryBuilder._safe_parse_expression(
+                "spend -- comment", ["spend"]
+            )
+
+    def test_rejects_quotes(self):
+        # Quotes won't be tokenized as valid tokens
+        with pytest.raises(ValueError):
+            QueryBuilder._safe_parse_expression(
+                "spend / 'injection'", ["spend"]
+            )
+
+    def test_allows_valid_expression(self):
+        result = QueryBuilder._safe_parse_expression(
+            "a + b", ["a", "b"]
+        )
+        assert "op_a.value" in result
+        assert "op_b.value" in result
+        assert "+" in result
+
+    def test_allows_parentheses(self):
+        result = QueryBuilder._safe_parse_expression(
+            "(a - b) / c", ["a", "b", "c"]
+        )
+        assert "(" in result
+        assert ")" in result
+
+    def test_allows_numeric_literals(self):
+        result = QueryBuilder._safe_parse_expression(
+            "a * 100", ["a"]
+        )
+        assert "100" in result
+
+    def test_allows_float_literals(self):
+        result = QueryBuilder._safe_parse_expression(
+            "a * 1.5", ["a"]
+        )
+        assert "1.5" in result
+
+    def test_division_wraps_nullif(self):
+        result = QueryBuilder._safe_parse_expression(
+            "a / b", ["a", "b"]
+        )
+        assert "nullIf(op_b.value, 0)" in result
+
+    def test_division_wraps_nullif_complex_denominator(self):
+        result = QueryBuilder._safe_parse_expression(
+            "a / (b + c)", ["a", "b", "c"]
+        )
+        assert "nullIf(( op_b.value + op_c.value ), 0)" in result
+
+    def test_division_wraps_nullif_numeric_literal(self):
+        result = QueryBuilder._safe_parse_expression(
+            "a / 2", ["a"]
+        )
+        assert "nullIf(2, 0)" in result
+
+    def test_no_formula_nesting(self):
+        with pytest.raises(ValueError, match="cannot be of type 'formula'"):
+            qb().build_query(
+                "formula",
+                {
+                    "time_range": {"start": "2026-01-01", "end": "2026-07-01"},
+                    "granularity": "monthly",
+                    "group_by": [],
+                    "operands": {
+                        "inner": {
+                            "type": "formula",
+                            "config": {},
+                        },
+                    },
+                    "expression": "inner",
+                },
+            )
+
+    def test_empty_operands_rejected(self):
+        with pytest.raises(ValueError, match="at least one operand"):
+            qb().build_query(
+                "formula",
+                {
+                    "time_range": {"start": "2026-01-01", "end": "2026-07-01"},
+                    "granularity": "monthly",
+                    "group_by": [],
+                    "operands": {},
+                    "expression": "",
+                },
+            )
+
+    def test_unmatched_opening_paren(self):
+        with pytest.raises(ValueError, match="Unmatched opening parenthesis"):
+            QueryBuilder._safe_parse_expression("(a + b", ["a", "b"])
+
+    def test_unmatched_closing_paren(self):
+        with pytest.raises(ValueError, match="Unmatched closing parenthesis"):
+            QueryBuilder._safe_parse_expression("a + b)", ["a", "b"])
+
+    def test_unused_operands_rejected(self):
+        with pytest.raises(ValueError, match="Unused operand.*unused"):
+            QueryBuilder._safe_parse_expression("a + b", ["a", "b", "unused"])
+
+    def test_all_operands_used_passes(self):
+        result = QueryBuilder._safe_parse_expression("a + b + c", ["a", "b", "c"])
+        assert "op_a.value" in result
+        assert "op_b.value" in result
+        assert "op_c.value" in result
+
+
+# ── SQL injection safety tests for operational ────────────
+
+
+class TestOperationalSQLSafety:
+    def test_rejects_sql_injection_in_metric_name(self):
+        with pytest.raises(ValueError, match="Unsafe characters"):
+            qb().build_query(
+                "operational",
+                {
+                    "metric_name": "test'; DROP TABLE x; --",
+                    "aggregation": "sum",
+                    "time_range": {"start": "2026-01-01", "end": "2026-07-01"},
+                    "granularity": "monthly",
+                    "group_by": [],
+                    "filters": {},
+                },
+            )
+
+    def test_rejects_sql_injection_in_dimension_filter(self):
+        with pytest.raises(ValueError, match="Unsafe characters"):
+            qb().build_query(
+                "operational",
+                {
+                    "metric_name": "marketing_spend",
+                    "dimension_filter": "x' OR '1'='1",
+                    "aggregation": "sum",
+                    "time_range": {"start": "2026-01-01", "end": "2026-07-01"},
+                    "granularity": "monthly",
+                    "group_by": [],
+                    "filters": {},
+                },
+            )
+
+    def test_rejects_invalid_aggregation(self):
+        with pytest.raises(ValueError, match="Invalid aggregation"):
+            qb().build_query(
+                "operational",
+                {
+                    "metric_name": "marketing_spend",
+                    "aggregation": "DROP",
+                    "time_range": {"start": "2026-01-01", "end": "2026-07-01"},
+                    "granularity": "monthly",
+                    "group_by": [],
+                    "filters": {},
+                },
+            )
+
+    def test_allows_safe_metric_names(self):
+        for name in ["marketing_spend", "to-incentive", "revenue.total", "Q1_2026"]:
+            sql = qb().build_query(
+                "operational",
+                {
+                    "metric_name": name,
+                    "aggregation": "sum",
+                    "time_range": {"start": "2026-01-01", "end": "2026-07-01"},
+                    "granularity": "monthly",
+                    "group_by": [],
+                    "filters": {},
+                },
+            )
+            assert f"metric_name = '{name}'" in sql
+
+
+# ── Scenario ID tests ──────────────────────────────────────
+
+
+class TestScenarioId:
+    def test_no_scenario_id_omits_filter(self):
+        """Without scenario_id, query should not filter on it."""
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "scenario_id" not in sql
+
+    def test_scenario_id_adds_filter(self):
+        """With scenario_id, query should include a WHERE filter."""
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "scenario_id": "scenario_v2",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "scenario_id = 'scenario_v2'" in sql
+        assert "metric_name = 'marketing_spend'" in sql
+
+    def test_scenario_id_actuals(self):
+        """scenario_id='actuals' should filter like any other value."""
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "total_revenue",
+                "aggregation": "sum",
+                "scenario_id": "actuals",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "scenario_id = 'actuals'" in sql
+
+    def test_scenario_id_rejects_injection(self):
+        """SQL injection in scenario_id should be rejected."""
+        with pytest.raises(ValueError, match="Unsafe characters"):
+            qb().build_query(
+                "operational",
+                {
+                    "metric_name": "marketing_spend",
+                    "aggregation": "sum",
+                    "scenario_id": "test'; DROP TABLE x; --",
+                    "time_range": {"start": "2026-01-01", "end": "2026-07-01"},
+                    "granularity": "monthly",
+                    "group_by": [],
+                    "filters": {},
+                },
+            )
+
+    def test_scenario_id_in_formula_operand(self):
+        """scenario_id should propagate into formula operand CTEs."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "spend": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "marketing_spend",
+                            "aggregation": "sum",
+                            "scenario_id": "scenario_neutral",
+                        },
+                    },
+                    "mau": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "mau",
+                            "aggregation": "sum",
+                            "scenario_id": "scenario_neutral",
+                        },
+                    },
+                },
+                "expression": "spend / mau",
+            },
+        )
+        # Both CTEs should filter on the scenario
+        assert sql.count("scenario_id = 'scenario_neutral'") == 2
+
+    def test_formula_mixed_scenarios(self):
+        """Formula can reference operands from different scenarios."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "actual_rev": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "total_revenue",
+                            "aggregation": "sum",
+                            "scenario_id": "actuals",
+                        },
+                    },
+                    "projected_rev": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "total_revenue",
+                            "aggregation": "sum",
+                            "scenario_id": "scenario_positive",
+                        },
+                    },
+                },
+                "expression": "projected_rev - actual_rev",
+            },
+        )
+        assert "scenario_id = 'actuals'" in sql
+        assert "scenario_id = 'scenario_positive'" in sql

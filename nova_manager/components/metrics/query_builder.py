@@ -16,9 +16,10 @@ class TimeRange(TypedDict):
     end: str
 
 
-class EventFilter(TypedDict):
+class EventFilter(TypedDict, total=False):
     event_name: str
     filters: dict | None
+    distinct: bool
 
 
 class EnhancedFilterType(TypedDict):
@@ -61,6 +62,26 @@ class RetentionMetricConfig(BaseMetricConfig):
     retention_window: str
 
 
+class OperationalMetricConfig(BaseMetricConfig):
+    metric_name: str
+    dimension_filter: str | None
+    aggregation: Literal["sum", "avg", "min", "max"]
+    scenario_id: str | None
+
+
+class FormulaOperand(TypedDict):
+    type: Literal["count", "aggregation", "ratio", "retention", "operational"]
+    config: dict
+
+
+class FormulaMetricConfig(TypedDict):
+    time_range: TimeRange | str
+    granularity: Literal["hourly", "daily", "weekly", "monthly", "none"]
+    group_by: list[GroupByType]
+    operands: dict[str, FormulaOperand]
+    expression: str
+
+
 # ClickHouse time truncation functions
 GRANULARITY_TRUNC_MAP = {
     "hourly": "toStartOfHour({ts})",
@@ -84,12 +105,14 @@ CORE_FIELDS = {"event_name", "user_id", "org_id", "app_id"}
 class QueryBuilder(EventsArtefacts):
     def build_query(
         self,
-        metric_type: Literal["count", "aggregation", "ratio", "retention"],
+        metric_type: Literal["count", "aggregation", "ratio", "retention", "operational", "formula"],
         metric_config: (
             CountMetricConfig
             | AggregationMetricConfig
             | RatioMetricConfig
             | RetentionMetricConfig
+            | OperationalMetricConfig
+            | FormulaMetricConfig
         ),
     ) -> str:
         if metric_type == "count":
@@ -104,6 +127,12 @@ class QueryBuilder(EventsArtefacts):
         elif metric_type == "retention":
             return self._build_retention_query(metric_config)
 
+        elif metric_type == "operational":
+            return self._build_operational_query(metric_config)
+
+        elif metric_type == "formula":
+            return self._build_formula_query(metric_config)
+
         raise Exception(f"Unsupported metric_type: {metric_type}")
 
     def _build_count_query(self, metric_config: CountMetricConfig):
@@ -111,7 +140,9 @@ class QueryBuilder(EventsArtefacts):
         group_by = metric_config["group_by"]
         filters = metric_config["filters"]
 
-        event_name = metric_config["event_name"]
+        event_name = self._sql_safe_identifier(
+            metric_config["event_name"], "event_name"
+        )
         distinct = metric_config["distinct"]
 
         start, end = self._get_start_end(time_range)
@@ -161,7 +192,9 @@ class QueryBuilder(EventsArtefacts):
         group_by = metric_config["group_by"]
         filters = metric_config["filters"]
 
-        event_name = metric_config["event_name"]
+        event_name = self._sql_safe_identifier(
+            metric_config["event_name"], "event_name"
+        )
         aggregation = metric_config["aggregation"]
         property = metric_config["property"]
 
@@ -219,13 +252,12 @@ class QueryBuilder(EventsArtefacts):
         filters = metric_config["filters"]
 
         numerator_config = metric_config["numerator"]
-        numerator_filters = numerator_config.get("filters") or {}
-        numerator_filters.update(filters)
+        numerator_filters = {**(numerator_config.get("filters") or {}), **filters}
 
         numerator_expression = self._build_count_query(
             {
                 "event_name": numerator_config["event_name"],
-                "distinct": False,
+                "distinct": numerator_config.get("distinct", False),
                 "time_range": time_range,
                 "granularity": granularity,
                 "group_by": group_by,
@@ -234,13 +266,12 @@ class QueryBuilder(EventsArtefacts):
         )
 
         denominator_config = metric_config["denominator"]
-        denominator_filters = denominator_config.get("filters") or {}
-        denominator_filters.update(filters)
+        denominator_filters = {**(denominator_config.get("filters") or {}), **filters}
 
         denominator_expression = self._build_count_query(
             {
                 "event_name": denominator_config["event_name"],
-                "distinct": False,
+                "distinct": denominator_config.get("distinct", False),
                 "time_range": time_range,
                 "granularity": granularity,
                 "group_by": group_by,
@@ -295,7 +326,9 @@ class QueryBuilder(EventsArtefacts):
         bucket_expr = self._time_bucket("e.client_ts", granularity)
 
         # Initial cohort CTE
-        initial_event_name = initial_event["event_name"]
+        initial_event_name = self._sql_safe_identifier(
+            initial_event["event_name"], "initial_event.event_name"
+        )
         initial_filters = initial_event.get("filters") or {}
         initial_filters.update(filters)
 
@@ -330,7 +363,9 @@ class QueryBuilder(EventsArtefacts):
         )
 
         # Return events CTE
-        return_event_name = return_event["event_name"]
+        return_event_name = self._sql_safe_identifier(
+            return_event["event_name"], "return_event.event_name"
+        )
         return_filters = return_event.get("filters") or {}
         return_filters.update(filters)
 
@@ -494,6 +529,11 @@ class QueryBuilder(EventsArtefacts):
 
         return joins
 
+    @staticmethod
+    def _escape_sql_string(value: str) -> str:
+        """Escape single quotes for ClickHouse string literals."""
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
     def _wheres_and_joins(
         self, event_name: str, filters: dict[str, EnhancedFilterType] | None
     ) -> tuple[list[str], list[str]]:
@@ -502,10 +542,15 @@ class QueryBuilder(EventsArtefacts):
         joins = []
         wheres = []
 
+        ALLOWED_OPS = {"=", "!=", ">", "<", ">=", "<="}
+
         for key, filter_data in filters.items():
-            value = filter_data["value"]
+            value = self._escape_sql_string(filter_data["value"])
             source = filter_data["source"]
             op = filter_data["op"]
+            if op not in ALLOWED_OPS:
+                raise ValueError(f"Unsupported filter operator: {op!r}")
+            self._sql_safe_identifier(key, "filter key")
 
             if key in CORE_FIELDS:
                 wheres.append(f"e.{key} {op} '{value}'")
@@ -556,7 +601,18 @@ class QueryBuilder(EventsArtefacts):
             if "start" not in time_range or "end" not in time_range:
                 raise ValueError("Invalid time range")
 
-            return time_range["start"], time_range["end"]
+            start_str = str(time_range["start"])
+            end_str = str(time_range["end"])
+            # Validate datetime format to prevent garbage in SQL
+            ts_pattern = re.compile(
+                r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}:\d{2})?$"
+            )
+            if not ts_pattern.match(start_str):
+                raise ValueError(f"Invalid start date format: {start_str!r}")
+            if not ts_pattern.match(end_str):
+                raise ValueError(f"Invalid end date format: {end_str!r}")
+
+            return start_str, end_str
 
     def _parse_interval_string(self, interval_str: str) -> tuple[int, str]:
         m = re.fullmatch(r"(\d+)([hdwmy])", interval_str.strip().lower())
@@ -575,3 +631,282 @@ class QueryBuilder(EventsArtefacts):
         unit_sql = UNIT_SQL_MAP[unit]
 
         return f"INTERVAL {qty} {unit_sql}"
+
+    # ── Operational metric ──────────────────────────────────
+
+    @staticmethod
+    def _sql_safe_identifier(value: str, field_name: str) -> str:
+        """Validate that a string is safe to embed in SQL (alphanumeric + _.-).
+        Prevents SQL injection through string interpolation."""
+        if not re.fullmatch(r"[a-zA-Z0-9_.\-]+", value):
+            raise ValueError(
+                f"Unsafe characters in {field_name}: {value!r}. "
+                f"Only alphanumeric, underscore, hyphen, and dot allowed."
+            )
+        return value
+
+    # Columns in business_metrics that can be filtered/grouped
+    _BUSINESS_METRIC_COLUMNS = {"dimension", "currency", "metric_name"}
+
+    def _build_operational_query(self, metric_config: OperationalMetricConfig):
+        time_range = metric_config["time_range"]
+        granularity = metric_config["granularity"]
+        group_by = metric_config.get("group_by", [])
+        filters = metric_config.get("filters") or {}
+        metric_name = self._sql_safe_identifier(
+            metric_config["metric_name"], "metric_name"
+        )
+        dimension_filter = metric_config.get("dimension_filter")
+        if dimension_filter:
+            dimension_filter = self._sql_safe_identifier(
+                dimension_filter, "dimension_filter"
+            )
+        aggregation = metric_config.get("aggregation", "sum")
+        if aggregation not in {"sum", "avg", "min", "max"}:
+            raise ValueError(f"Invalid aggregation: {aggregation}")
+
+        start, end = self._get_start_end(time_range)
+
+        time_bucket = self._time_bucket("period_start", granularity)
+
+        select_parts = [f"{time_bucket} AS period"]
+
+        # Support group_by on business_metrics columns (dimension, currency)
+        group_by_keys = []
+        for item in group_by:
+            key = item["key"]
+            if key in self._BUSINESS_METRIC_COLUMNS:
+                select_parts.append(key)
+                group_by_keys.append(key)
+
+        agg_expr = f"{aggregation.upper()}(value) AS value"
+        select_parts.append(agg_expr)
+
+        select_expression = "SELECT " + ",\n    ".join(select_parts)
+
+        table_name = self._business_metrics_table_name()
+        from_expression = f"FROM {table_name} FINAL"
+
+        where_parts = [
+            f"metric_name = '{metric_name}'",
+            f"period_start >= '{start}'",
+            f"period_start < '{end}'",
+        ]
+
+        if dimension_filter:
+            where_parts.append(f"dimension = '{dimension_filter}'")
+
+        scenario_id = metric_config.get("scenario_id")
+        if scenario_id:
+            scenario_id = self._sql_safe_identifier(scenario_id, "scenario_id")
+            where_parts.append(f"scenario_id = '{scenario_id}'")
+
+        # Apply filters on business_metrics columns
+        ALLOWED_OPS = {"=", "!=", ">", "<", ">=", "<="}
+        for key, filter_data in filters.items():
+            if key in self._BUSINESS_METRIC_COLUMNS:
+                value = self._escape_sql_string(filter_data["value"])
+                op = filter_data.get("op", "=")
+                if op not in ALLOWED_OPS:
+                    raise ValueError(f"Unsupported filter operator: {op!r}")
+                self._sql_safe_identifier(key, "filter key")
+                where_parts.append(f"{key} {op} '{value}'")
+
+        where_expression = "WHERE " + " AND ".join(where_parts)
+
+        group_by_expression = "GROUP BY " + ", ".join(["period"] + group_by_keys)
+        order_expression = "ORDER BY period"
+
+        return self._format_query(
+            select_expression,
+            from_expression,
+            where_expression=where_expression,
+            group_by_expression=group_by_expression,
+            order_expression=order_expression,
+        )
+
+    # ── Formula metric ──────────────────────────────────────
+
+    def _build_formula_query(self, metric_config: FormulaMetricConfig):
+        time_range = metric_config["time_range"]
+        granularity = metric_config["granularity"]
+        group_by = metric_config.get("group_by", [])
+        operands = metric_config["operands"]
+        expression = metric_config["expression"]
+
+        if not operands:
+            raise ValueError("Formula metric must have at least one operand")
+
+        # No recursive formulas
+        for name, operand in operands.items():
+            if operand["type"] == "formula":
+                raise ValueError(
+                    f"Operand '{name}' cannot be of type 'formula' (no nesting)"
+                )
+
+        operand_names = list(operands.keys())
+        safe_expr = self._safe_parse_expression(expression, operand_names)
+
+        # Build each operand's sub-query as a CTE
+        cte_parts = []
+        for name, operand in operands.items():
+            op_config = dict(operand["config"])
+            # Override time_range and granularity from the formula level
+            op_config["time_range"] = time_range
+            op_config["granularity"] = granularity
+            # Operational metrics only support grouping by business_metrics columns;
+            # filter out unsupported group_by keys so the CTE schema matches
+            # what the final SELECT/JOIN expects.
+            if operand["type"] == "operational":
+                op_group_by = [g for g in group_by if g["key"] in self._BUSINESS_METRIC_COLUMNS]
+            else:
+                op_group_by = group_by
+            op_config.setdefault("group_by", op_group_by)
+            op_config.setdefault("filters", {})
+            sub_query = self.build_query(operand["type"], op_config)
+            cte_parts.append(f"op_{name} AS (\n{sub_query}\n)")
+
+        with_expression = "WITH\n" + ",\n".join(cte_parts)
+
+        # Build final SELECT joining all CTEs on period.
+        # Use only group_by keys that the first operand actually emits.
+        first_name = operand_names[0]
+        first_type = operands[first_name]["type"]
+        if first_type == "operational":
+            group_by_keys = [item["key"] for item in group_by if item["key"] in self._BUSINESS_METRIC_COLUMNS]
+        else:
+            group_by_keys = [item["key"] for item in group_by]
+
+        select_parts = [f"op_{first_name}.period AS period"]
+        select_parts += [f"op_{first_name}.{c} AS {c}" for c in group_by_keys]
+        select_parts.append(f"{safe_expr} AS value")
+
+        select_expression = "SELECT " + ",\n    ".join(select_parts)
+
+        from_expression = f"FROM op_{first_name}"
+
+        # JOIN remaining operands
+        join_parts = []
+        for name in operand_names[1:]:
+            join_conditions = [f"op_{first_name}.period = op_{name}.period"]
+            for c in group_by_keys:
+                join_conditions.append(
+                    f"ifNull(op_{first_name}.{c},'') = ifNull(op_{name}.{c},'')"
+                )
+            join_parts.append(
+                f"JOIN op_{name} ON " + " AND ".join(join_conditions)
+            )
+
+        join_expression = "\n".join(join_parts) if join_parts else None
+
+        order_expression = f"ORDER BY op_{first_name}.period"
+
+        return self._format_query(
+            select_expression,
+            from_expression,
+            join_expression=join_expression,
+            order_expression=order_expression,
+            with_expression=with_expression,
+        )
+
+    @staticmethod
+    def _safe_parse_expression(expression: str, operand_names: list[str]) -> str:
+        """Parse and validate a formula expression, returning safe SQL.
+
+        Only allows: operand names, arithmetic operators (+, -, *, /),
+        parentheses, and numeric literals.
+        Replaces operand names with op_{name}.value references.
+        Wraps division denominators with nullIf(..., 0).
+        """
+        # Tokenize: split on whitespace and operators while keeping operators
+        tokens = re.findall(r"[a-zA-Z_]\w*|[+\-*/()]|\d+(?:\.\d+)?", expression)
+
+        # Reconstruct and validate
+        allowed_operators = {"+", "-", "*", "/", "(", ")"}
+        numeric_pattern = re.compile(r"^\d+(\.\d+)?$")
+
+        validated_tokens = []
+        for token in tokens:
+            if token in operand_names:
+                validated_tokens.append(f"op_{token}.value")
+            elif token in allowed_operators:
+                validated_tokens.append(token)
+            elif numeric_pattern.match(token):
+                validated_tokens.append(token)
+            else:
+                raise ValueError(
+                    f"Invalid token in formula expression: '{token}'. "
+                    f"Allowed: operand names ({', '.join(operand_names)}), "
+                    f"operators (+, -, *, /), parentheses, numeric literals."
+                )
+
+        # Validate parenthesis balance
+        depth = 0
+        for token in validated_tokens:
+            if token == "(":
+                depth += 1
+            elif token == ")":
+                depth -= 1
+            if depth < 0:
+                raise ValueError("Unmatched closing parenthesis in expression")
+        if depth != 0:
+            raise ValueError("Unmatched opening parenthesis in expression")
+
+        # Verify expression tokens ⊆ operand_names (no unknown references)
+        used_operands = {t for t in re.findall(r"[a-zA-Z_]\w*", expression)}
+        unknown = used_operands - set(operand_names)
+        if unknown:
+            raise ValueError(
+                f"Unknown operand(s) in expression: {', '.join(unknown)}. "
+                f"Defined operands: {', '.join(operand_names)}"
+            )
+
+        # Verify operand_names ⊆ expression tokens (no unused operands that
+        # would generate parasitic CTEs and INNER JOINs)
+        unused = set(operand_names) - used_operands
+        if unused:
+            raise ValueError(
+                f"Unused operand(s): {', '.join(unused)}. "
+                f"All defined operands must appear in the expression. "
+                f"Remove them or update the expression."
+            )
+
+        # Wrap division denominators with nullIf(..., 0) for safe division.
+        # Handles: / op_X.value, / (expr), / numeric_literal
+        result_tokens = []
+        i = 0
+        while i < len(validated_tokens):
+            if validated_tokens[i] == "/" and i + 1 < len(validated_tokens):
+                next_token = validated_tokens[i + 1]
+                result_tokens.append("/")
+
+                if next_token.startswith("op_"):
+                    # Simple operand: / op_X.value
+                    result_tokens.append(f"nullIf({next_token}, 0)")
+                    i += 2
+                elif next_token == "(":
+                    # Parenthesized sub-expression: collect tokens until matching ")"
+                    paren_depth = 0
+                    sub_tokens = []
+                    j = i + 1
+                    while j < len(validated_tokens):
+                        if validated_tokens[j] == "(":
+                            paren_depth += 1
+                        elif validated_tokens[j] == ")":
+                            paren_depth -= 1
+                        sub_tokens.append(validated_tokens[j])
+                        if paren_depth == 0:
+                            break
+                        j += 1
+                    inner = " ".join(sub_tokens[1:-1])  # strip outer parens
+                    result_tokens.append(f"nullIf(( {inner} ), 0)")
+                    i = j + 1
+                else:
+                    # Numeric literal or other: wrap it
+                    result_tokens.append(f"nullIf({next_token}, 0)")
+                    i += 2
+            else:
+                result_tokens.append(validated_tokens[i])
+                i += 1
+
+        return " ".join(result_tokens)

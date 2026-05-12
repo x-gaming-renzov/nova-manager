@@ -307,13 +307,79 @@ class EventsController(EventsArtefacts):
                 self._user_profile_props_table_name(), user_profile_rows
             )
 
+    def create_business_metrics_table(self):
+        ddl = f"""
+        CREATE TABLE IF NOT EXISTS {self._business_metrics_table_name()} (
+            metric_name String,
+            dimension String,
+            value Float64,
+            currency String DEFAULT '',
+            scenario_id String DEFAULT 'actuals',
+            period_start DateTime64(3),
+            created_at DateTime64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY toYYYYMM(period_start)
+        ORDER BY (metric_name, dimension, period_start, scenario_id)
+        """
+        try:
+            ClickHouseService().create_table_if_not_exists(ddl)
+            logger.info(
+                f"Business metrics table created/confirmed: {self._business_metrics_table_name()}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to create business metrics table: {str(e)}")
+            raise e
+        return self._business_metrics_table_name()
+
+    def ingest_business_metrics(self, rows: list[dict], scenario_id: str = "actuals"):
+        time_now = datetime.now(timezone.utc)
+        ch_rows = []
+        for i, row in enumerate(rows):
+            try:
+                value = float(row["value"])
+                if not __import__("math").isfinite(value):
+                    raise ValueError(f"value must be finite, got {value}")
+                ch_rows.append(
+                    {
+                        "metric_name": row["metric_name"],
+                        "dimension": row.get("dimension", ""),
+                        "value": value,
+                        "currency": row.get("currency", ""),
+                        "scenario_id": row.get("scenario_id", scenario_id),
+                        "period_start": row["period_start"],
+                        "created_at": time_now.isoformat(),
+                    }
+                )
+            except (KeyError, ValueError, TypeError) as e:
+                logger.error(f"Invalid business metric row {i}: {e}")
+                raise ValueError(f"Invalid row at index {i}: {e}") from e
+
+        try:
+            ClickHouseService().insert_rows(
+                self._business_metrics_table_name(), ch_rows
+            )
+        except Exception as e:
+            logger.error(f"ClickHouse insertion failed for business metrics: {e}")
+            raise
+
+    @staticmethod
+    def _escape_ch_string(value: str) -> str:
+        """Escape a value for safe embedding in a ClickHouse string literal."""
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
     def reconcile_user_in_clickhouse(self, anonymous_id: str, identified_id: str):
         """Re-key anon rows → identified user in ClickHouse.
 
         user_id is part of the ORDER BY key in MergeTree tables, so it
         cannot be updated in-place.  Instead we INSERT … SELECT with the
         new user_id and then DELETE the old rows.
+
+        Uses ``* REPLACE(... AS user_id)`` so that column positions are
+        preserved regardless of where ``user_id`` appears in the schema.
         """
+        safe_anon = self._escape_ch_string(anonymous_id)
+        safe_identified = self._escape_ch_string(identified_id)
+
         ch = ClickHouseService()
         tables = [
             self._raw_events_table_name(),
@@ -321,21 +387,32 @@ class EventsController(EventsArtefacts):
             self._user_profile_props_table_name(),
             self._user_experience_table_name(),
         ]
+        completed_tables = []
         for table in tables:
             try:
-                # 1. Copy rows with the new user_id
+                # 1. Copy rows with the new user_id.
+                #    * REPLACE keeps every column in its original position
+                #    and swaps only the named column's value, avoiding the
+                #    silent column-shift that * EXCEPT would cause when
+                #    user_id is not the first column.
                 insert_stmt = (
                     f"INSERT INTO {table} "
-                    f"SELECT '{identified_id}' AS user_id, * EXCEPT(user_id) "
-                    f"FROM {table} WHERE user_id = '{anonymous_id}'"
+                    f"SELECT * REPLACE('{safe_identified}' AS user_id) "
+                    f"FROM {table} WHERE user_id = '{safe_anon}'"
                 )
                 ch.execute(insert_stmt)
 
-                # 2. Remove the old anon rows
+                # 2. Remove the old anon rows (async mutation in ClickHouse)
                 delete_stmt = (
                     f"ALTER TABLE {table} DELETE "
-                    f"WHERE user_id = '{anonymous_id}'"
+                    f"WHERE user_id = '{safe_anon}'"
                 )
                 ch.execute(delete_stmt)
+                completed_tables.append(table)
             except Exception as e:
-                logger.error(f"reconcile_user_in_clickhouse failed for {table}: {e}")
+                logger.error(
+                    f"reconcile_user_in_clickhouse failed for {table} "
+                    f"(completed {len(completed_tables)}/{len(tables)} tables, "
+                    f"anon={anonymous_id}, identified={identified_id}): {e}"
+                )
+                raise
