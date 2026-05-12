@@ -8,6 +8,7 @@ from nova_manager.core.config import (
     CLICKHOUSE_PASSWORD,
 )
 from nova_manager.core.log import logger
+from nova_manager.service.analytics_service import AnalyticsService
 
 
 def _get_client() -> Client:
@@ -20,7 +21,7 @@ def _get_client() -> Client:
     )
 
 
-class ClickHouseService:
+class ClickHouseService(AnalyticsService):
     def __init__(self):
         self._client = None
 
