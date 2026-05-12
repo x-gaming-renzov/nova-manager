@@ -373,6 +373,9 @@ class EventsController(EventsArtefacts):
         user_id is part of the ORDER BY key in MergeTree tables, so it
         cannot be updated in-place.  Instead we INSERT … SELECT with the
         new user_id and then DELETE the old rows.
+
+        Uses ``* REPLACE(... AS user_id)`` so that column positions are
+        preserved regardless of where ``user_id`` appears in the schema.
         """
         safe_anon = self._escape_ch_string(anonymous_id)
         safe_identified = self._escape_ch_string(identified_id)
@@ -387,10 +390,14 @@ class EventsController(EventsArtefacts):
         completed_tables = []
         for table in tables:
             try:
-                # 1. Copy rows with the new user_id
+                # 1. Copy rows with the new user_id.
+                #    * REPLACE keeps every column in its original position
+                #    and swaps only the named column's value, avoiding the
+                #    silent column-shift that * EXCEPT would cause when
+                #    user_id is not the first column.
                 insert_stmt = (
                     f"INSERT INTO {table} "
-                    f"SELECT '{safe_identified}' AS user_id, * EXCEPT(user_id) "
+                    f"SELECT * REPLACE('{safe_identified}' AS user_id) "
                     f"FROM {table} WHERE user_id = '{safe_anon}'"
                 )
                 ch.execute(insert_stmt)
