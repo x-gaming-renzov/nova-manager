@@ -29,6 +29,7 @@ class AuthContext(BaseModel):
     app_id: Optional[str] = None  # Can be None before app creation
     email: str
     role: UserRole  # User role in the organization
+    analytics_backend: str = "clickhouse"
 
 
 class SDKAuthContext(BaseModel):
@@ -36,6 +37,7 @@ class SDKAuthContext(BaseModel):
 
     organisation_id: str
     app_id: str
+    analytics_backend: str = "clickhouse"
 
 
 def hash_password(password: str) -> str:

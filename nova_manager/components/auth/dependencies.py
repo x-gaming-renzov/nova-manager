@@ -13,9 +13,24 @@ from nova_manager.core.security import (
 )
 from nova_manager.core.enums import UserRole
 from nova_manager.core.log import logger
+from nova_manager.database.session import SessionLocal
+from nova_manager.components.auth.models import App
 
 # OAuth2 scheme for extracting Bearer tokens
 security = HTTPBearer()
+
+
+def _lookup_analytics_backend(app_id: str) -> str:
+    """Look up the analytics_backend for an app. Returns 'clickhouse' as default."""
+    if not app_id:
+        return "clickhouse"
+    try:
+        db = SessionLocal()
+        app = db.query(App.analytics_backend).filter(App.pid == app_id).first()
+        db.close()
+        return app.analytics_backend if app else "clickhouse"
+    except Exception:
+        return "clickhouse"
 
 
 async def get_current_auth(
@@ -67,6 +82,7 @@ async def require_app_context(
             detail="App context required. Please create an app first.",
         )
 
+    auth.analytics_backend = _lookup_analytics_backend(auth.app_id)
     return auth
 
 
@@ -182,4 +198,5 @@ async def require_sdk_app_context(
             detail="App context required",
         )
 
+    auth.analytics_backend = _lookup_analytics_backend(auth.app_id)
     return auth
