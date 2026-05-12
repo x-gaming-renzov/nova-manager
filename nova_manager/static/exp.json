@@ -1,0 +1,111 @@
+
+{
+  "objects": {
+    "player_progression_config": {
+      "type": "Param",
+      "keys": {
+        "starting_health_multiplier": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        },
+        "starting_movement_speed": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        },
+        "exp_to_level_multiplier": {
+          "type": "number",
+          "description": "",
+          "default": 5
+        },
+        "ability_drop_rarity_weights": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        }
+      }
+    },
+    "game_balance_config": {
+      "type": "Param",
+      "keys": {
+        "monster_spawn_rate_multiplier": {
+          "type": "number",
+          "description": "Multiplier for monster spawn rates",
+          "default": 1
+        },
+        "monster_health_multiplier": {
+          "type": "number",
+          "description": "Multiplier for monster health",
+          "default": 1
+        },
+        "monster_damage_multiplier": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        },
+        "exp_gem_drop_rate": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        },
+        "coin_drop_rate": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        },
+        "NewProperty6": {
+          "type": "text",
+          "description": "",
+          "default": ""
+        }
+      }
+    },
+    "combat_config": {
+      "type": "Param",
+      "keys": {
+        "player_damage_multiplier": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        },
+        "knockback_strength": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        },
+        "armor_effectiveness": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        },
+        "healing_effectiveness": {
+          "type": "number",
+          "description": "",
+          "default": 1
+        }
+      }
+    },
+    "r": {
+      "type": "Param",
+      "keys": {
+        "NewProperty1": {
+          "type": "text",
+          "description": "",
+          "default": "t"
+        }
+      }
+    }
+  },
+  "experiences": {
+    "VampireSurvivalExperience": {
+      "description": "VampireSurvivalExperience",
+      "objects": {
+        "player_progression_config": true,
+        "game_balance_config": true,
+        "combat_config": true
+      }
+    }
+  }
+}
+

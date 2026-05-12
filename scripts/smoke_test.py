@@ -24,6 +24,7 @@ from scripts.integration import (
     test_events,
     test_business_metrics,
     test_simulations,
+    test_retention,
     test_invitations,
     test_auth_guards,
 )
@@ -38,7 +39,8 @@ MODULES = [
     test_events,        # 14-17: track events, worker, metrics compute, schema
     test_business_metrics,  # 20-26: business data, operational & formula metrics
     test_simulations,       # 27-30: simulation CRUD, engine, KPI validation
-    test_invitations,   # 18: send invitation, list, validate (email)
+    test_retention,     # retention metric compute
+    test_invitations,   # send invitation, list, validate (email)
     test_auth_guards,   # 19: unauthorized access checks
 ]
 

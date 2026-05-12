@@ -381,19 +381,24 @@ class QueryBuilder(EventsArtefacts):
             + f"\n    WHERE r.event_name = '{return_event_name}' AND r.client_ts >= '{start}' AND r.client_ts < '{end}'{' AND ' + ' AND '.join(f_where_ret) if f_where_ret else ''}\n)"
         )
 
-        # Final select
+        # Final select — LEFT JOIN on user_id only (equality), time-window
+        # check inside uniqExactIf to avoid ClickHouse restrictions on
+        # cross-table conditions in both JOIN ON and CTE WHERE clauses.
+        retained_cond = f"r.ret_ts > i.first_ts AND r.ret_ts < i.first_ts + {window_sql}"
+
         select_cols = ["i.cohort_period AS period"] + [f"i.{c}" for c in group_by_keys]
         group_by_cols = ["i.cohort_period"] + group_by_keys
         select_list = ", ".join(select_cols)
         group_clause = ", ".join(group_by_cols)
 
-        # ClickHouse: uniqExact instead of COUNT(DISTINCT), uniqExactIf for conditional,
-        # nullIf instead of SAFE_DIVIDE, ts + INTERVAL instead of TIMESTAMP_ADD
         final_sql = (
             "SELECT\n    "
             + select_list
-            + ",\n    uniqExact(i.user_id) AS cohort_users,\n    uniqExactIf(i.user_id, r.ret_ts IS NOT NULL) AS retained_users,\n    uniqExactIf(i.user_id, r.ret_ts IS NOT NULL) / nullIf(uniqExact(i.user_id), 0) AS value"
-            + f"\nFROM initial_cohort i\nLEFT JOIN return_events r\n  ON r.user_id = i.user_id\n  AND r.ret_ts > i.first_ts\n  AND r.ret_ts < i.first_ts + {window_sql}\nGROUP BY {group_clause}\nORDER BY i.cohort_period"
+            + f",\n    uniqExact(i.user_id) AS cohort_users"
+            + f",\n    uniqExactIf(i.user_id, {retained_cond}) AS retained_users"
+            + f",\n    uniqExactIf(i.user_id, {retained_cond}) / nullIf(uniqExact(i.user_id), 0) AS value"
+            + f"\nFROM initial_cohort i\nLEFT JOIN return_events r\n  ON r.user_id = i.user_id"
+            + f"\nGROUP BY {group_clause}\nORDER BY i.cohort_period"
         )
 
         return f"WITH\n{init_cte},\n{ret_cte}\n{final_sql}"

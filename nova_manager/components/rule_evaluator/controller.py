@@ -225,23 +225,23 @@ class RuleEvaluator:
         elif operator == "not_equals":
             return actual_value != expected_value
         elif operator == "greater_than":
-            return actual_value > expected_value
+            return actual_value is not None and actual_value > expected_value
         elif operator == "less_than":
-            return actual_value < expected_value
+            return actual_value is not None and actual_value < expected_value
         elif operator == "greater_than_or_equal":
-            return actual_value >= expected_value
+            return actual_value is not None and actual_value >= expected_value
         elif operator == "less_than_or_equal":
-            return actual_value <= expected_value
+            return actual_value is not None and actual_value <= expected_value
         elif operator == "in":
             return actual_value in expected_value
         elif operator == "not_in":
             return actual_value not in expected_value
         elif operator == "contains":
-            return expected_value in str(actual_value)
+            return actual_value is not None and expected_value in str(actual_value)
         elif operator == "starts_with":
-            return str(actual_value).startswith(str(expected_value))
+            return actual_value is not None and str(actual_value).startswith(str(expected_value))
         elif operator == "ends_with":
-            return str(actual_value).endswith(str(expected_value))
+            return actual_value is not None and str(actual_value).endswith(str(expected_value))
         else:
             return False
 
