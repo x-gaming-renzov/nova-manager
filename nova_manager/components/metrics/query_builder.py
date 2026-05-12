@@ -66,6 +66,7 @@ class OperationalMetricConfig(BaseMetricConfig):
     metric_name: str
     dimension_filter: str | None
     aggregation: Literal["sum", "avg", "min", "max"]
+    scenario_id: str | None
 
 
 class FormulaOperand(TypedDict):
@@ -689,6 +690,11 @@ class QueryBuilder(EventsArtefacts):
 
         if dimension_filter:
             where_parts.append(f"dimension = '{dimension_filter}'")
+
+        scenario_id = metric_config.get("scenario_id")
+        if scenario_id:
+            scenario_id = self._sql_safe_identifier(scenario_id, "scenario_id")
+            where_parts.append(f"scenario_id = '{scenario_id}'")
 
         # Apply filters on business_metrics columns
         ALLOWED_OPS = {"=", "!=", ">", "<", ">=", "<="}

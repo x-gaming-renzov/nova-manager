@@ -70,6 +70,15 @@ Field reference:
 | `period_start` | datetime | yes | Start of the period this value covers. ISO 8601 format. |
 | `currency` | string | no | Currency code (e.g. `USD`). Max 10 chars. |
 
+The request also accepts a top-level `scenario_id` (string, defaults to `"actuals"`). All rows in the batch are tagged with this scenario. Different scenarios for the same metric+dimension+period are stored independently.
+
+```json
+{
+  "scenario_id": "scenario_v2",
+  "data": [ ... ]
+}
+```
+
 Common metric names used in the GTM KPI flow:
 
 | Category | metric_name | Example dimensions |
@@ -85,18 +94,19 @@ Common metric names used in the GTM KPI flow:
 
 #### GET /api/v1/metrics/business-data/schema/
 
-Returns all distinct metric_name + dimension combinations that have been ingested. Use this to populate dropdown menus when building operational or formula metrics.
+Returns all distinct metric_name + dimension + scenario_id combinations that have been ingested. Use this to populate dropdown menus when building operational or formula metrics.
 
 Auth: Bearer token with app context.
+
+Query params: `scenario_id` (optional) — filter to a specific scenario.
 
 Response
 
 ```json
 [
-  { "metric_name": "marketing_spend", "dimension": "facebook" },
-  { "metric_name": "marketing_spend", "dimension": "google_ads" },
-  { "metric_name": "to_incentive_payout", "dimension": "tier_1" },
-  { "metric_name": "total_revenue", "dimension": "ad_revenue" },
-  { "metric_name": "total_revenue", "dimension": "sponsorship" }
+  { "metric_name": "marketing_spend", "dimension": "facebook", "scenario_id": "actuals" },
+  { "metric_name": "marketing_spend", "dimension": "google_ads", "scenario_id": "actuals" },
+  { "metric_name": "marketing_spend", "dimension": "facebook", "scenario_id": "scenario_v2" },
+  { "metric_name": "total_revenue", "dimension": "", "scenario_id": "actuals" }
 ]
 ```

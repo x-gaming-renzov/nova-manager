@@ -732,3 +732,136 @@ class TestOperationalSQLSafety:
                 },
             )
             assert f"metric_name = '{name}'" in sql
+
+
+# ── Scenario ID tests ──────────────────────────────────────
+
+
+class TestScenarioId:
+    def test_no_scenario_id_omits_filter(self):
+        """Without scenario_id, query should not filter on it."""
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "scenario_id" not in sql
+
+    def test_scenario_id_adds_filter(self):
+        """With scenario_id, query should include a WHERE filter."""
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "marketing_spend",
+                "aggregation": "sum",
+                "scenario_id": "scenario_v2",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "scenario_id = 'scenario_v2'" in sql
+        assert "metric_name = 'marketing_spend'" in sql
+
+    def test_scenario_id_actuals(self):
+        """scenario_id='actuals' should filter like any other value."""
+        sql = qb().build_query(
+            "operational",
+            {
+                "metric_name": "total_revenue",
+                "aggregation": "sum",
+                "scenario_id": "actuals",
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "filters": {},
+            },
+        )
+        assert "scenario_id = 'actuals'" in sql
+
+    def test_scenario_id_rejects_injection(self):
+        """SQL injection in scenario_id should be rejected."""
+        with pytest.raises(ValueError, match="Unsafe characters"):
+            qb().build_query(
+                "operational",
+                {
+                    "metric_name": "marketing_spend",
+                    "aggregation": "sum",
+                    "scenario_id": "test'; DROP TABLE x; --",
+                    "time_range": {"start": "2026-01-01", "end": "2026-07-01"},
+                    "granularity": "monthly",
+                    "group_by": [],
+                    "filters": {},
+                },
+            )
+
+    def test_scenario_id_in_formula_operand(self):
+        """scenario_id should propagate into formula operand CTEs."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "spend": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "marketing_spend",
+                            "aggregation": "sum",
+                            "scenario_id": "scenario_neutral",
+                        },
+                    },
+                    "mau": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "mau",
+                            "aggregation": "sum",
+                            "scenario_id": "scenario_neutral",
+                        },
+                    },
+                },
+                "expression": "spend / mau",
+            },
+        )
+        # Both CTEs should filter on the scenario
+        assert sql.count("scenario_id = 'scenario_neutral'") == 2
+
+    def test_formula_mixed_scenarios(self):
+        """Formula can reference operands from different scenarios."""
+        sql = qb().build_query(
+            "formula",
+            {
+                "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
+                "granularity": "monthly",
+                "group_by": [],
+                "operands": {
+                    "actual_rev": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "total_revenue",
+                            "aggregation": "sum",
+                            "scenario_id": "actuals",
+                        },
+                    },
+                    "projected_rev": {
+                        "type": "operational",
+                        "config": {
+                            "metric_name": "total_revenue",
+                            "aggregation": "sum",
+                            "scenario_id": "scenario_positive",
+                        },
+                    },
+                },
+                "expression": "projected_rev - actual_rev",
+            },
+        )
+        assert "scenario_id = 'actuals'" in sql
+        assert "scenario_id = 'scenario_positive'" in sql

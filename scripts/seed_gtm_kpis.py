@@ -102,10 +102,10 @@ METRICS_TO_EXTRACT = [
     ("webshop_revenue",         "Webshop Revenue (USD)",          "",                None),
     ("total_revenue",           "TOTAL REVENUE (USD)",            "",                None),
 
-    # Marketing budget by channel
-    ("marketing_spend",         "TO Incentives (L1+L2+L3) → derived", "to_empowerment", None),
+    # Marketing budget by channel (P-2 through P-8/O-3 only;
+    # P-1 TO Incentives and P-3 Sponsored Credits are already captured
+    # as separate metrics above, matching the simulation engine output)
     ("marketing_spend",         "Agency Retainer",                "social_channel",  None),
-    ("marketing_spend",         "Sponsored Credits → derived",    "prize_pools",     None),
     ("marketing_spend",         "Campus Ambassadors",             "college_activation", None),
     ("marketing_spend",         "BGMI Streamers",                 "kol_influencer",  None),
     ("marketing_spend",         "Search & Store Optimization",    "seo_aso",         None),
@@ -125,6 +125,7 @@ EXPECTED_METRICS = [
     ("Revenue per Tournament",      "revenue_per_tournament"),
     ("Net Margin (Rev - Mkt Spend)","net_margin"),
     ("Margin %",                    "margin_pct"),
+    ("Demand CAC",                  "demand_cac"),
 ]
 
 
@@ -149,6 +150,96 @@ def extract_business_data(ws) -> list[dict]:
             })
 
     return rows
+
+
+def extract_assumptions(ws) -> dict:
+    """Extract simulation input assumptions from one Excel sheet.
+
+    Returns a dict matching the simulation engine's assumptions schema.
+    """
+    months_list = list(MONTH_COLS.values())  # 2026-07-01, ...
+
+    def _val(search_text: str, col: str, unit: str | None = None, default=0):
+        row = _find_row(ws, search_text, unit=unit)
+        if row is None:
+            return default
+        v = ws[f"{col}{row}"].value
+        return v if v is not None else default
+
+    col_letters = list(MONTH_COLS.keys())  # F, G, H, I, J, K
+
+    # Read exchange rate from cell B3 (global for all months)
+    usd_inr_rate = ws["B3"].value
+    if usd_inr_rate is None or not isinstance(usd_inr_rate, (int, float)):
+        usd_inr_rate = 90  # fallback
+
+    assumptions = {
+        "time_range": {"start_month": "2026-07", "end_month": "2026-12"},
+        "seed_values": {"active_tos": 0},
+        "months": {},
+    }
+
+    for i, (col, period) in enumerate(MONTH_COLS.items()):
+        month_key = period[:7]  # "2026-07"
+
+        # Marketing budgets by channel
+        budget_searches = [
+            ("social_channel",      "Agency Retainer"),
+            ("college_activation",  "Campus Ambassadors"),
+            ("kol_influencer",      "BGMI Streamers"),
+            ("seo_aso",             "Search & Store Optimization"),
+            ("bgmi_giveaways",      "UC Codes & Rewards"),
+            ("pr_media",            "Press Releases"),
+            ("marquee_tourney",     "BATTLIN BGMI Open"),
+        ]
+        budgets = {}
+        for channel, search in budget_searches:
+            row = _find_row(ws, search)
+            if row:
+                v = ws[f"{col}{row}"].value
+                if v and v > 0:
+                    budgets[channel] = float(v)
+
+        m = {
+            "new_tos_per_month": float(_val("New TO added", col, "#")),
+            "to_retention_rate": float(_val("Retention rate of Tos", col, default=1.0)),
+            "tournaments_per_to_per_month": float(_val("Tournaments / TO / Month", col, "#")),
+            "grimm_bot_tournaments": float(_val("Tounrmanents by GRIMM", col, default=0)),
+            "mau": float(_val("MAU", col, "#")),
+            "dau_mau_ratio": float(_val("DAU / MAU", col, "%")),
+            "pct_inorganic_players": float(_val("% Inorganic", col, "%")),
+            "player_cpi": float(_val("Player CPI", col, "$")),
+            "avg_teams_per_tournament": float(_val("Avg Teams / Tournament", col, "#", 16)),
+            "avg_players_per_team": float(_val("Avg Players / Team", col, "#", 4)),
+            "fill_rate": float(_val("Avg Fill Rate", col, "%")),
+            "milestone_reward_per_to_inr": float(_val("Avg Milestone Reward", col, default=3500)),
+            "leaderboard_pool_inr": float(_val("Monthly Leaderboard Pool", col, default=240000)),
+            "grand_prize_amortized_inr": float(_val("Amortized Grand Prize", col, default=300000)),
+            "initial_credit_per_to_inr": float(_val("Initial Credit / New TO", col, default=2000)),
+            "initial_credit_new_users_inr": float(_val("Initial Credit for new users", col, default=0)),
+            "r1_achievement_rate": float(_val("R1(10+TM)", col, default=0)),
+            "r2_achievement_rate": float(_val("R2(20+TM)", col, default=0)),
+            "usd_inr_rate": float(usd_inr_rate),
+            "marketing_budgets": budgets,
+            "ad_revenue": {
+                "static_impressions_per_dau": float(_val("Static Impressions / DAU", col, "#", 0)),
+                "interstitial_impressions_per_dau": float(_val("Interstitial Impressions / DAU", col, "#", 0)),
+                "video_impressions_per_dau": float(_val("Video Impressions / DAU", col, "#", 0)),
+                "ecpm_static": float(_val("eCPM Static", col, "$", 0)),
+                "ecpm_interstitial": float(_val("eCPM Interstitial", col, "$", 0)),
+                "ecpm_video": float(_val("eCPM Video", col, "$", 0)),
+                "ad_fill_rate": float(_val("Ad Fill Rate", col, "%", 0)),
+            },
+            "sponsorship": {
+                "active_deals": float(_val("Active Sponsor Deals", col, "#", 0)),
+                "avg_deal_value": float(_val("Avg Deal Value", col, "$", 0)),
+            },
+            "webshop_revenue": float(_val("Webshop Revenue", col, "$", 0)),
+        }
+
+        assumptions["months"][month_key] = m
+
+    return assumptions
 
 
 def extract_expected_values(ws) -> dict[str, dict[str, float]]:
@@ -367,6 +458,7 @@ FORMULA_TO_EXPECTED = {
     "Supply CAC": "supply_cac",
     "Cost per Tournament": "cost_per_tournament",
     "Revenue per Tournament": "revenue_per_tournament",
+    "Demand CAC": "demand_cac",
 }
 
 PERIOD_LABELS = {
@@ -377,157 +469,48 @@ PERIOD_LABELS = {
 
 # ── Main ─────────────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(description="Seed GTM KPI metrics from Excel")
-    parser.add_argument("--base-url", default="http://localhost:8000")
-    parser.add_argument("--sheet", default="v2",
-                        help="Sheet alias (v2, neutral, positive, akshay) or full name")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print payloads without calling the API")
-    args = parser.parse_args()
+def _compute_config_with_scenario(fm: dict, scenario_id: str) -> dict:
+    """Return a compute config with scenario_id injected into operational operands."""
+    config = json.loads(json.dumps(fm["config"]))  # deep copy
+    for operand in config.get("operands", {}).values():
+        if operand["type"] == "operational":
+            operand["config"]["scenario_id"] = scenario_id
+    return config
 
-    sheet_name = SHEET_ALIASES.get(args.sheet, args.sheet)
-    base = args.base_url.rstrip("/")
-    api = f"{base}/api/v1"
 
-    # ── Load Excel ───────────────────────────────────────────
-    print(f"Loading Excel: {EXCEL_PATH}")
-    wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True)
-    if sheet_name not in wb.sheetnames:
-        print(f"ERROR: Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")
-        sys.exit(1)
-
-    ws = wb[sheet_name]
-    print(f"Sheet: {sheet_name}  (rows: {ws.max_row})")
-
-    # ── Extract business data ────────────────────────────────
-    print(f"\n{'=' * 60}")
-    print("  Phase 1: Extract & Ingest Business Data")
-    print(f"{'=' * 60}")
-
-    biz_data = extract_business_data(ws)
-    print(f"\nExtracted {len(biz_data)} business data rows")
-
-    # Group by metric_name for summary
-    by_metric = {}
-    for row in biz_data:
-        key = row["metric_name"]
-        if row["dimension"]:
-            key += f" [{row['dimension']}]"
-        by_metric.setdefault(key, []).append(row)
-
-    for metric_key, rows in sorted(by_metric.items()):
-        vals = ", ".join(
-            f"{PERIOD_LABELS.get(r['period_start'][:10], r['period_start'][:7])}={_fmt(r['value'])}"
-            for r in sorted(rows, key=lambda x: x["period_start"])
-        )
-        print(f"  {metric_key}: {vals}")
-
-    if args.dry_run:
-        print("\n[DRY RUN] Business data payload:")
-        print(json.dumps({"data": biz_data[:5]}, indent=2, default=str))
-        print(f"  ... ({len(biz_data)} rows total)")
-
-    # ── Authenticate (fresh account) ─────────────────────────
-    if not args.dry_run:
-        import uuid
-        run_id = uuid.uuid4().hex[:8]
-
-        print(f"\n{'=' * 60}")
-        print(f"  Setup: Fresh Account (run: {run_id})")
-        print(f"{'=' * 60}")
-
-        auth = _fresh_account_setup(api, run_id)
-        if not auth:
-            sys.exit(1)
-        headers = auth["headers"]
-
-        # Ingest in batches
-        print(f"\n  Ingesting {len(biz_data)} business data rows...")
-        batch_size = 50
-        total_ingested = 0
-        for i in range(0, len(biz_data), batch_size):
-            batch = biz_data[i:i + batch_size]
-            r = requests.post(f"{api}/metrics/business-data/",
-                              headers=headers, json={"data": batch})
-            if r.status_code == 200:
-                total_ingested += r.json().get("count", 0)
-            else:
-                print(f"  FAIL  Ingest batch {i}: {r.status_code} — {r.text[:200]}")
-                sys.exit(1)
-
-        print(f"  OK    Ingested {total_ingested} business data rows")
-
-        # Verify via schema discovery
-        r = requests.get(f"{api}/metrics/business-data/schema/", headers=headers)
+def _ingest_scenario(api: str, headers: dict, biz_data: list[dict], scenario_id: str) -> int:
+    """Ingest business data rows under a scenario_id. Returns count ingested."""
+    batch_size = 50
+    total = 0
+    for i in range(0, len(biz_data), batch_size):
+        batch = biz_data[i:i + batch_size]
+        r = requests.post(f"{api}/metrics/business-data/",
+                          headers=headers,
+                          json={"data": batch, "scenario_id": scenario_id})
         if r.status_code == 200:
-            schema = r.json()
-            metric_names = sorted({row["metric_name"] for row in schema})
-            print(f"  OK    Schema discovery: {len(metric_names)} metric names")
-            for mn in metric_names:
-                dims = sorted({row["dimension"] for row in schema if row["metric_name"] == mn and row["dimension"]})
-                dim_str = f" [{', '.join(dims)}]" if dims else ""
-                print(f"         {mn}{dim_str}")
-
-    # ── Extract expected values for validation ───────────────
-    expected = extract_expected_values(ws)
-
-    if args.dry_run:
-        print("\n[DRY RUN] Phase 2 & 3 skipped. Expected values from Excel:")
-        for name, monthly in expected.items():
-            vals = ", ".join(
-                f"{PERIOD_LABELS.get(p, p[:7])}={v:,.4f}" for p, v in sorted(monthly.items())
-            )
-            print(f"  {name}: {vals}")
-        return
-
-    # ── Create formula metrics ───────────────────────────────
-    print(f"\n{'=' * 60}")
-    print("  Phase 2: Create Formula Metric Definitions")
-    print(f"{'=' * 60}")
-
-    saved_metrics = {}
-    for fm in FORMULA_METRICS:
-        print(f"\n  {fm['name']}: {fm['description']}")
-        print(f"    Expression: {fm['config']['expression']}")
-        operand_summary = ", ".join(
-            f"{k}={v['config'].get('metric_name', v['config'].get('event_name', '?'))}"
-            for k, v in fm["config"]["operands"].items()
-        )
-        print(f"    Operands:   {operand_summary}")
-
-        r = requests.post(f"{api}/metrics/", headers=headers, json=fm)
-        if r.status_code == 200:
-            metric = r.json()
-            saved_metrics[fm["name"]] = metric["pid"]
-            print(f"    SAVED  pid={metric['pid']}")
+            total += r.json().get("count", 0)
         else:
-            print(f"    FAIL   {r.status_code}: {r.text[:200]}")
+            print(f"  FAIL  Ingest batch {i}: {r.status_code} — {r.text[:200]}")
+            return -1
+    return total
 
-    # Verify saved metrics via list endpoint
-    r = requests.get(f"{api}/metrics/", headers=headers)
-    if r.status_code == 200:
-        all_metrics = r.json()
-        types = {m.get("type") for m in all_metrics}
-        print(f"\n  Listed {len(all_metrics)} metrics, types: {types}")
 
-    # ── Validate: compute each formula and compare ───────────
-    print(f"\n{'=' * 60}")
-    print("  Phase 3: Validate — Compute & Compare Against Excel")
-    print(f"{'=' * 60}")
-
+def _validate_scenario(api: str, headers: dict, scenario_id: str,
+                       expected: dict, formulas: list[dict]) -> tuple[int, int]:
+    """Compute each formula for a scenario and compare against expected values.
+    Returns (pass_count, fail_count)."""
     pass_count = 0
     fail_count = 0
 
-    for fm in FORMULA_METRICS:
+    for fm in formulas:
         name = fm["name"]
         expected_key = FORMULA_TO_EXPECTED.get(name)
         expected_monthly = expected.get(expected_key, {})
 
-        # Compute the formula via API
+        compute_config = _compute_config_with_scenario(fm, scenario_id)
         r = requests.post(f"{api}/metrics/compute/", headers=headers, json={
             "type": fm["type"],
-            "config": fm["config"],
+            "config": compute_config,
         })
 
         print(f"\n  {name}  ({fm['config']['expression']})")
@@ -542,7 +525,6 @@ def main():
             fail_count += 1
             continue
 
-        # Compare each month
         metric_passed = True
         for row in sorted(data, key=lambda x: str(x.get("period", ""))):
             period_str = str(row.get("period", ""))[:10]
@@ -555,7 +537,6 @@ def main():
                 continue
 
             if exp is not None:
-                # Allow 1% tolerance for floating point
                 if exp == 0:
                     match = abs(computed) < 0.01
                 else:
@@ -572,7 +553,180 @@ def main():
         else:
             fail_count += 1
 
-    # Also test retrieving a saved metric by ID and computing it
+    return pass_count, fail_count
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Seed GTM KPI metrics from Excel")
+    parser.add_argument("--base-url", default="http://localhost:8000")
+    parser.add_argument("--sheet", default="v2",
+                        help="Sheet alias (v2, neutral, positive, akshay) or full name")
+    parser.add_argument("--all-scenarios", action="store_true",
+                        help="Ingest and validate all 4 Excel scenarios under one account")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print payloads without calling the API")
+    parser.add_argument("--via-simulation", action="store_true",
+                        help="Use the simulation API instead of direct business-data ingestion")
+    args = parser.parse_args()
+
+    base = args.base_url.rstrip("/")
+    api = f"{base}/api/v1"
+
+    # Determine which sheets to process
+    if args.all_scenarios:
+        sheets_to_run = list(SHEET_ALIASES.items())  # [(alias, full_name), ...]
+    else:
+        alias = args.sheet
+        full_name = SHEET_ALIASES.get(alias, alias)
+        sheets_to_run = [(alias, full_name)]
+
+    # ── Load Excel ───────────────────────────────────────────
+    print(f"Loading Excel: {EXCEL_PATH}")
+    wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True)
+
+    # Extract data for all requested sheets
+    scenario_data = {}  # {alias: {biz_data, expected, sheet_name, assumptions?}}
+    for alias, sheet_name in sheets_to_run:
+        if sheet_name not in wb.sheetnames:
+            print(f"ERROR: Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")
+            sys.exit(1)
+        ws = wb[sheet_name]
+        biz_data = extract_business_data(ws)
+        expected = extract_expected_values(ws)
+        entry = {"biz_data": biz_data, "expected": expected, "sheet_name": sheet_name}
+        if args.via_simulation:
+            entry["assumptions"] = extract_assumptions(ws)
+        scenario_data[alias] = entry
+
+    # ── Phase 1: Show extracted data ─────────────────────────
+    for alias, sdata in scenario_data.items():
+        scenario_id = f"scenario_{alias}"
+        biz_data = sdata["biz_data"]
+
+        print(f"\n{'=' * 60}")
+        print(f"  Phase 1: Extract — {sdata['sheet_name']}  (scenario: {scenario_id})")
+        print(f"{'=' * 60}")
+        print(f"\nExtracted {len(biz_data)} business data rows")
+
+        by_metric = {}
+        for row in biz_data:
+            key = row["metric_name"]
+            if row["dimension"]:
+                key += f" [{row['dimension']}]"
+            by_metric.setdefault(key, []).append(row)
+
+        for metric_key, rows in sorted(by_metric.items()):
+            vals = ", ".join(
+                f"{PERIOD_LABELS.get(r['period_start'][:10], r['period_start'][:7])}={_fmt(r['value'])}"
+                for r in sorted(rows, key=lambda x: x["period_start"])
+            )
+            print(f"  {metric_key}: {vals}")
+
+    if args.dry_run:
+        sample = list(scenario_data.values())[0]["biz_data"]
+        print(f"\n[DRY RUN] Sample payload (scenario_{sheets_to_run[0][0]}):")
+        print(json.dumps({"scenario_id": f"scenario_{sheets_to_run[0][0]}", "data": sample[:3]}, indent=2, default=str))
+        print(f"  ... ({len(sample)} rows)")
+        print("\n[DRY RUN] Phase 2 & 3 skipped.")
+        return
+
+    # ── Setup: Fresh Account ─────────────────────────────────
+    import uuid
+    run_id = uuid.uuid4().hex[:8]
+
+    print(f"\n{'=' * 60}")
+    print(f"  Setup: Fresh Account (run: {run_id})")
+    print(f"{'=' * 60}")
+
+    auth = _fresh_account_setup(api, run_id)
+    if not auth:
+        sys.exit(1)
+    headers = auth["headers"]
+
+    # ── Ingest or Simulate each scenario ────────────────────
+    if args.via_simulation:
+        print(f"\n{'=' * 60}")
+        print(f"  Ingestion via Simulation API")
+        print(f"{'=' * 60}")
+
+        for alias, sdata in scenario_data.items():
+            scenario_id = f"scenario_{alias}"
+            assumptions = sdata["assumptions"]
+
+            # Create simulation
+            r = requests.post(f"{api}/simulations/", headers=headers, json={
+                "name": f"GTM {alias} ({run_id})",
+                "description": f"Auto-generated from Excel sheet {sdata['sheet_name']}",
+                "scenario_id": scenario_id,
+                "assumptions": assumptions,
+            })
+            if r.status_code != 200:
+                print(f"  FAIL  Create simulation '{alias}': {r.status_code} — {r.text[:200]}")
+                sys.exit(1)
+            sim_id = r.json()["pid"]
+            print(f"\n  Created simulation '{alias}': {sim_id}")
+
+            # Run simulation
+            r = requests.post(f"{api}/simulations/{sim_id}/run/", headers=headers)
+            if r.status_code != 200:
+                print(f"  FAIL  Run simulation: {r.status_code} — {r.text[:200]}")
+                sys.exit(1)
+            run_data = r.json()
+            metrics = run_data["metrics_written"]
+            print(f"  OK    Ran simulation: {metrics} metrics written")
+
+    else:
+        for alias, sdata in scenario_data.items():
+            scenario_id = f"scenario_{alias}"
+            biz_data = sdata["biz_data"]
+
+            print(f"\n  Ingesting {len(biz_data)} rows as '{scenario_id}'...")
+            count = _ingest_scenario(api, headers, biz_data, scenario_id)
+            if count < 0:
+                sys.exit(1)
+            print(f"  OK    Ingested {count} rows")
+
+    # ── Schema discovery ─────────────────────────────────────
+    r = requests.get(f"{api}/metrics/business-data/schema/", headers=headers)
+    if r.status_code == 200:
+        schema = r.json()
+        scenarios_found = sorted({row.get("scenario_id", "?") for row in schema})
+        metric_count = len({row["metric_name"] for row in schema})
+        print(f"\n  Schema: {metric_count} metric names across {len(scenarios_found)} scenarios: {scenarios_found}")
+
+    # ── Phase 2: Create formula metrics (scenario-agnostic) ──
+    print(f"\n{'=' * 60}")
+    print("  Phase 2: Create Formula Metric Definitions (no scenario)")
+    print(f"{'=' * 60}")
+
+    saved_metrics = {}
+    for fm in FORMULA_METRICS:
+        print(f"\n  {fm['name']}: {fm['config']['expression']}")
+        r = requests.post(f"{api}/metrics/", headers=headers, json=fm)
+        if r.status_code == 200:
+            metric = r.json()
+            saved_metrics[fm["name"]] = metric["pid"]
+            print(f"    SAVED  pid={metric['pid']}")
+        else:
+            print(f"    FAIL   {r.status_code}: {r.text[:200]}")
+
+    # ── Phase 3: Validate each scenario ──────────────────────
+    total_pass = 0
+    total_fail = 0
+
+    for alias, sdata in scenario_data.items():
+        scenario_id = f"scenario_{alias}"
+        expected = sdata["expected"]
+
+        print(f"\n{'=' * 60}")
+        print(f"  Phase 3: Validate — {scenario_id}")
+        print(f"{'=' * 60}")
+
+        p, f = _validate_scenario(api, headers, scenario_id, expected, FORMULA_METRICS)
+        total_pass += p
+        total_fail += f
+
+    # ── Phase 3b: Verify saved metric retrieval ──────────────
     if saved_metrics:
         print(f"\n{'─' * 60}")
         print(f"  Phase 3b: Verify saved metric retrieval")
@@ -581,14 +735,20 @@ def main():
             r = requests.get(f"{api}/metrics/{pid}/", headers=headers)
             if r.status_code == 200:
                 m = r.json()
-                print(f"  OK    {name} (pid={pid}): type={m['type']}, expression={m['config'].get('expression', 'N/A')}")
+                has_scenario = any(
+                    "scenario_id" in op.get("config", {})
+                    for op in m["config"].get("operands", {}).values()
+                )
+                print(f"  OK    {name} (pid={pid}): type={m['type']}, scenario_in_def={has_scenario}")
             else:
                 print(f"  FAIL  {name} (pid={pid}): {r.status_code}")
 
     # ── Summary ──────────────────────────────────────────────
+    n_scenarios = len(scenario_data)
     print(f"\n{'=' * 60}")
-    print(f"  Results: {pass_count}/{pass_count + fail_count} formulas match Excel")
-    print(f"  Saved metrics: {len(saved_metrics)}")
+    print(f"  Results: {total_pass}/{total_pass + total_fail} formulas match Excel")
+    print(f"  Scenarios tested: {n_scenarios} ({', '.join(f'scenario_{a}' for a in scenario_data)})")
+    print(f"  Saved metrics: {len(saved_metrics)} (scenario-agnostic)")
     print(f"{'=' * 60}")
 
     if saved_metrics:
@@ -596,7 +756,7 @@ def main():
         for name, pid in saved_metrics.items():
             print(f"    {name}: {pid}")
 
-    sys.exit(0 if fail_count == 0 else 1)
+    sys.exit(0 if total_fail == 0 else 1)
 
 
 def _fmt(v) -> str:

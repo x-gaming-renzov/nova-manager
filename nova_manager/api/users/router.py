@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nova_manager.core.log import logger
 from nova_manager.api.users.request_response import (
     IdentifyUserRequest,
     IdentifyUserResponse,
@@ -160,11 +161,20 @@ async def identify_user(
         await users_crud.merge_user_profiles(identified_user, anon_profile, data.user_profile)
         await users_crud.reassign_user_experiences(anon_user.pid, identified_user.pid)
         await users_crud.delete_user(anon_user)
-        await db.commit()
-        await db.refresh(identified_user)
+        # Flush but do NOT commit yet — commit after ClickHouse jobs are
+        # enqueued so a failed enqueue doesn't leave Postgres committed
+        # with no ClickHouse reconciliation scheduled.
+        await db.flush()
         merged = True
 
     events_controller = EventsController(organisation_id, app_id)
+
+    # Log the mapping so it can be recovered if the RQ worker fails
+    logger.info(
+        f"identify: enqueuing ClickHouse reconciliation "
+        f"anon={data.anonymous_id} -> identified={data.identified_id} "
+        f"org={organisation_id} app={app_id} merged={merged}"
+    )
 
     QueueController().add_task(
         events_controller.reconcile_user_in_clickhouse,
@@ -179,5 +189,10 @@ async def identify_user(
             {},
             identified_user.user_profile or {},
         )
+
+    # Commit Postgres only after ClickHouse jobs are enqueued
+    if merged:
+        await db.commit()
+        await db.refresh(identified_user)
 
     return {"nova_user_id": identified_user.pid, "merged": merged}
