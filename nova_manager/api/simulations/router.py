@@ -117,7 +117,7 @@ async def delete_simulation(
 
 
 @router.post("/{simulation_id}/run/", response_model=RunSimulationResponse)
-async def run_simulation(
+def run_simulation(
     simulation_id: UUID,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
