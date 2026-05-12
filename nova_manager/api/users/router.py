@@ -54,7 +54,7 @@ async def create_user(
     nova_user_id = user.pid
 
     QueueController().add_task(
-        EventsController(organisation_id, app_id).track_user_profile,
+        EventsController(organisation_id, app_id, auth.analytics_backend).track_user_profile,
         user_id,
         old_profile,
         user_profile,
@@ -95,7 +95,7 @@ async def update_user_profile(
     nova_user_id = user.pid
 
     QueueController().add_task(
-        EventsController(organisation_id, app_id).track_user_profile,
+        EventsController(organisation_id, app_id, auth.analytics_backend).track_user_profile,
         user_id,
         old_profile,
         user_profile,
@@ -167,7 +167,7 @@ async def identify_user(
         await db.flush()
         merged = True
 
-    events_controller = EventsController(organisation_id, app_id)
+    events_controller = EventsController(organisation_id, app_id, auth.analytics_backend)
 
     # Log the mapping so it can be recovered if the RQ worker fails
     logger.info(

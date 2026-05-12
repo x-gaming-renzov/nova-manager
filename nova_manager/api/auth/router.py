@@ -270,9 +270,10 @@ async def create_app(
     )
 
     try:
-        events_controller = EventsController(str(auth.organisation_id), str(app.pid))
+        backend = getattr(app, "analytics_backend", "clickhouse")
+        events_controller = EventsController(str(auth.organisation_id), str(app.pid), backend)
 
-        # Create ClickHouse database
+        # Create analytics database
         events_controller.create_database()
 
         # Create raw events table

@@ -19,10 +19,12 @@ from nova_manager.components.metrics.crud import (
 )
 from nova_manager.components.metrics.events_controller import EventsController
 from nova_manager.components.metrics.query_builder import QueryBuilder
+from nova_manager.components.metrics.query_builder_factory import get_query_builder
 from nova_manager.components.segments.crud import SegmentsCRUD
 from nova_manager.components.metrics.query_builder import KeySource
 from nova_manager.database.session import get_db
 from nova_manager.service.clickhouse_service import ClickHouseService
+from nova_manager.service.analytics_factory import get_analytics_service
 from nova_manager.queues.controller import QueueController
 from nova_manager.components.auth.dependencies import (
     require_app_context,
@@ -41,7 +43,7 @@ async def track_event(
 ):
     # Enqueue background job using organisation/app from API key
     QueueController().add_task(
-        EventsController(auth.organisation_id, auth.app_id).track_event,
+        EventsController(auth.organisation_id, auth.app_id, auth.analytics_backend).track_event,
         event.user_id,
         event.event_name,
         event.event_data,
@@ -67,7 +69,7 @@ async def track_events(
     ]
 
     QueueController().add_task(
-        EventsController(auth.organisation_id, auth.app_id).track_events,
+        EventsController(auth.organisation_id, auth.app_id, auth.analytics_backend).track_events,
         request.user_id,
         events,
     )
@@ -126,11 +128,12 @@ async def compute_metric(
             "op": "=",
         }
 
-    query_builder = QueryBuilder(organisation_id, app_id)
+    backend = auth.analytics_backend
+    query_builder = get_query_builder(backend, organisation_id, app_id)
     query = query_builder.build_query(type, config)
 
-    clickhouse_service = ClickHouseService()
-    result = clickhouse_service.run_query(query)
+    analytics_service = get_analytics_service(backend)
+    result = analytics_service.run_query(query)
 
     return result
 
@@ -197,7 +200,7 @@ async def ingest_business_data(
     auth: AuthContext = Depends(require_app_context),
 ):
     """Ingest operational/business data (marketing spend, payouts, revenue, etc.)."""
-    controller = EventsController(auth.organisation_id, auth.app_id)
+    controller = EventsController(auth.organisation_id, auth.app_id, auth.analytics_backend)
     controller.create_business_metrics_table()
     rows = [
         {
@@ -222,15 +225,25 @@ async def list_business_data_schema(
     scenario_id: str = Query(None, description="Filter to a specific scenario"),
 ):
     """List distinct metric_name + dimension + scenario_id combinations from business_metrics table."""
-    controller = EventsController(auth.organisation_id, auth.app_id)
+    backend = auth.analytics_backend
+    controller = EventsController(auth.organisation_id, auth.app_id, backend)
     table = controller._business_metrics_table_name()
-    query = f"SELECT DISTINCT metric_name, dimension, scenario_id FROM {table} FINAL"
-    if scenario_id:
-        safe_scenario = QueryBuilder._sql_safe_identifier(scenario_id, "scenario_id")
-        query += f" WHERE scenario_id = '{safe_scenario}'"
-    query += " ORDER BY scenario_id, metric_name, dimension"
+
+    if backend == "adx":
+        query = f"{table} | distinct metric_name, dimension, scenario_id"
+        if scenario_id:
+            safe_scenario = QueryBuilder._sql_safe_identifier(scenario_id, "scenario_id")
+            query = f"{table} | where scenario_id == '{safe_scenario}' | distinct metric_name, dimension, scenario_id"
+        query += " | order by scenario_id asc, metric_name asc, dimension asc"
+    else:
+        query = f"SELECT DISTINCT metric_name, dimension, scenario_id FROM {table} FINAL"
+        if scenario_id:
+            safe_scenario = QueryBuilder._sql_safe_identifier(scenario_id, "scenario_id")
+            query += f" WHERE scenario_id = '{safe_scenario}'"
+        query += " ORDER BY scenario_id, metric_name, dimension"
+
     try:
-        result = ClickHouseService().run_query(query)
+        result = get_analytics_service(backend).run_query(query)
     except Exception:
         # Table may not exist yet if no business data has been ingested
         return []

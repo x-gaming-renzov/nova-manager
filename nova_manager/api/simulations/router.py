@@ -141,7 +141,7 @@ def run_simulation(
         rows = compute_simulation(simulation.assumptions)
 
         # Write to ClickHouse
-        controller = EventsController(auth.organisation_id, auth.app_id)
+        controller = EventsController(auth.organisation_id, auth.app_id, auth.analytics_backend)
         controller.create_business_metrics_table()
         controller.ingest_business_metrics(rows, scenario_id=simulation.scenario_id)
 
