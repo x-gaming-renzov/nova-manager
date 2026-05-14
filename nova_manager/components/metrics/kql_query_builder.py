@@ -1,13 +1,9 @@
 """KQL (Kusto Query Language) query builder for Azure Data Explorer.
 
 Parallel implementation to query_builder.py (ClickHouse SQL).
-
-Supports two modes controlled by `use_shared_db`:
-  - False (default/target): per-org/app databases, same as ClickHouse.
-    Table names come from artefacts.py (e.g. raw_events). No tenant columns.
-  - True (temporary): single shared database (kr-es-analytics-dev).
-    Table names are PascalCase (RawEvents). Queries include
-    organisation_id/app_id filters for tenant isolation.
+Uses per-org/app databases, same architecture as ClickHouse.
+Table names are plain (raw_events, event_props, etc.) — database
+scoping is handled by ADXService targeting the correct database.
 """
 
 import re
@@ -58,59 +54,24 @@ class KQLQueryBuilder(EventsArtefacts):
         build_query(metric_type, metric_config) -> str
     """
 
-    def __init__(self, organisation_id: str, app_id: str, use_shared_db: bool = False):
-        super().__init__(organisation_id, app_id)
-        self.use_shared_db = use_shared_db
-
-    # ── Table name overrides (shared-DB mode only) ─────────────
-    _SHARED_DB_TABLE_MAP = {
-        "raw_events": "RawEvents",
-        "event_props": "EventProps",
-        "user_profile_props": "UserProfileProps",
-        "user_experience": "UserExperience",
-        "business_metrics": "BusinessMetrics",
-    }
-
-    def _table_name(self, base_name: str) -> str:
-        """Return table name. In shared-DB mode, uses PascalCase without db prefix."""
-        if self.use_shared_db:
-            return self._SHARED_DB_TABLE_MAP.get(base_name, base_name)
-        # Per-org/app database mode: use artefacts naming (just table, no db prefix needed in KQL)
-        return base_name
+    # ── Table name overrides ──────────────────────────────────
+    # KQL targets the database at the service level, so table names
+    # are plain (no database prefix like ClickHouse's org_x_app_y.table).
 
     def _raw_events_table_name(self) -> str:
-        if self.use_shared_db:
-            return "RawEvents"
         return "raw_events"
 
     def _event_props_table_name(self) -> str:
-        if self.use_shared_db:
-            return "EventProps"
         return "event_props"
 
     def _user_profile_props_table_name(self) -> str:
-        if self.use_shared_db:
-            return "UserProfileProps"
         return "user_profile_props"
 
     def _user_experience_table_name(self) -> str:
-        if self.use_shared_db:
-            return "UserExperience"
         return "user_experience"
 
     def _business_metrics_table_name(self) -> str:
-        if self.use_shared_db:
-            return "BusinessMetrics"
         return "business_metrics"
-
-    def _tenant_filters(self) -> list[str]:
-        """Return org/app filter clauses. Only needed in shared-DB mode."""
-        if self.use_shared_db:
-            return [
-                f"organisation_id == '{self.organisation_id}'",
-                f"app_id == '{self.app_id}'",
-            ]
-        return []
 
     def build_query(
         self,
@@ -157,7 +118,7 @@ class KQLQueryBuilder(EventsArtefacts):
         lines.extend(join_lines)
 
         # Where
-        where_parts = self._tenant_filters() + [
+        where_parts = [
             f"event_name == '{event_name}'",
             f"client_ts >= datetime({start})",
             f"client_ts < datetime({end})",
@@ -198,7 +159,7 @@ class KQLQueryBuilder(EventsArtefacts):
         )
 
         # Where
-        where_parts = self._tenant_filters() + [
+        where_parts = [
             f"event_name == '{event_name}'",
             f"client_ts >= datetime({start})",
             f"client_ts < datetime({end})",
@@ -297,7 +258,7 @@ class KQLQueryBuilder(EventsArtefacts):
         group_by_keys = [item["key"] for item in group_by]
 
         # Initial cohort
-        init_where = self._tenant_filters() + [
+        init_where = [
             f"event_name == '{init_event_name}'",
             f"client_ts >= datetime({start})",
             f"client_ts < datetime({end})",
@@ -320,7 +281,7 @@ class KQLQueryBuilder(EventsArtefacts):
         init_query = "\n".join(init_lines)
 
         # Return events
-        ret_where = self._tenant_filters() + [
+        ret_where = [
             f"event_name == '{ret_event_name}'",
             f"client_ts >= datetime({start})",
             f"client_ts < datetime({end})",
@@ -373,7 +334,7 @@ class KQLQueryBuilder(EventsArtefacts):
         start, end = self._get_start_end(time_range)
         bucket = self._time_bucket("period_start", granularity)
 
-        where_parts = self._tenant_filters() + [
+        where_parts = [
             f"metric_name == '{metric_name}'",
             f"period_start >= datetime({start})",
             f"period_start < datetime({end})",

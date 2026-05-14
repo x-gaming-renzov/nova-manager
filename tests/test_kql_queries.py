@@ -14,12 +14,8 @@ APP_ID = "test-app"
 TR = {"start": "2026-03-18 12:17:18", "end": "2026-04-17 12:17:18"}
 
 
-def _qb(use_shared_db=False):
-    return KQLQueryBuilder(ORG_ID, APP_ID, use_shared_db=use_shared_db)
-
-
-def _qb_shared():
-    return KQLQueryBuilder(ORG_ID, APP_ID, use_shared_db=True)
+def _qb():
+    return KQLQueryBuilder(ORG_ID, APP_ID)
 
 
 # ── Count queries ───────────────────────────────────────────
@@ -92,21 +88,14 @@ class TestKQLCountQuery:
         assert "| summarize" in kql
         assert "| order by" in kql
 
-    def test_uses_correct_table_per_org_db(self):
+    def test_uses_correct_table(self):
         kql = _qb().build_query("count", {
             "event_name": "test", "distinct": False,
             "time_range": TR, "granularity": "daily", "group_by": [], "filters": {},
         })
         assert "raw_events" in kql
-
-    def test_uses_correct_table_shared_db(self):
-        kql = _qb_shared().build_query("count", {
-            "event_name": "test", "distinct": False,
-            "time_range": TR, "granularity": "daily", "group_by": [], "filters": {},
-        })
-        assert "RawEvents" in kql
-        assert "organisation_id ==" in kql
-        assert "app_id ==" in kql
+        # Per-org/app DB mode: no tenant columns in query
+        assert "organisation_id" not in kql
 
 
 # ── Aggregation queries ─────────────────────────────────────
@@ -285,15 +274,6 @@ class TestKQLOperationalQuery:
         })
         assert "business_metrics" in kql
         assert "raw_events" not in kql
-
-    def test_shared_db_uses_pascal_case(self):
-        kql = _qb_shared().build_query("operational", {
-            "metric_name": "x", "aggregation": "sum",
-            "time_range": {"start": "2026-01-01 00:00:00", "end": "2026-07-01 00:00:00"},
-            "granularity": "monthly", "group_by": [], "filters": {},
-        })
-        assert "BusinessMetrics" in kql
-        assert "organisation_id ==" in kql
 
     def test_group_by_dimension(self):
         kql = _qb().build_query("operational", {

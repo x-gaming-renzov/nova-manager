@@ -28,59 +28,57 @@ class EventsController(EventsArtefacts):
         self.analytics_backend = analytics_backend
 
     def _get_service(self):
+        """Return the analytics service for the configured backend.
+        For ADX, targets the per-org/app database."""
+        if self.analytics_backend == "adx":
+            from nova_manager.service.adx_service import ADXService
+            return ADXService(database=self.database_name)
         return get_analytics_service(self.analytics_backend)
 
-    @property
-    def _adx_use_shared_db(self) -> bool:
-        """True when using the shared ADX database (no per-org/app DB yet)."""
-        from nova_manager.core.config import ADX_DATABASE
-        return bool(ADX_DATABASE)
-
-    _ADX_TABLE_MAP = {
-        "raw_events": "RawEvents",
-        "event_props": "EventProps",
-        "user_profile_props": "UserProfileProps",
-        "user_experience": "UserExperience",
-        "business_metrics": "BusinessMetrics",
-    }
-
     def _adx_table_name(self, ch_table: str) -> str:
-        """Map ClickHouse table name to ADX table name. In shared-DB mode uses PascalCase."""
-        if self._adx_use_shared_db:
-            short = ch_table.split(".")[-1] if "." in ch_table else ch_table
-            return self._ADX_TABLE_MAP.get(short, short)
-        # Per-org/app DB: just use the short table name (no db prefix in KQL)
-        short = ch_table.split(".")[-1] if "." in ch_table else ch_table
-        return short
-
-    def _adx_enrich_rows(self, rows: list[dict]) -> list[dict]:
-        """Add organisation_id and app_id to rows when using shared-DB mode."""
-        if self._adx_use_shared_db:
-            for row in rows:
-                row["organisation_id"] = self.organisation_id
-                row["app_id"] = self.app_id
-        return rows
+        """Extract plain table name from ClickHouse's db.table format for KQL."""
+        return ch_table.split(".")[-1] if "." in ch_table else ch_table
 
     def create_database(self):
         if self.analytics_backend == "adx":
-            if self._adx_use_shared_db:
-                logger.info("ADX: using shared database, skipping DB creation")
-                return
-            # Per-org/app DB mode
-            self._get_service().execute(f".create database ['{self.database_name}'] volatile")
+            import subprocess
+            from nova_manager.core.config import ADX_CLUSTER_URI
+            # Use ARM API (az kusto database create) — Kusto control plane
+            # doesn't grant us .create database, but ARM does.
+            result = subprocess.run(
+                [
+                    "az", "kusto", "database", "create",
+                    "--cluster-name", ADX_CLUSTER_URI.split("//")[1].split(".")[0],
+                    "--resource-group", "KR-ESports-RG-Dev",
+                    "--database-name", self.database_name,
+                    "--read-write-database",
+                    "soft-delete-period=P365D",
+                    "hot-cache-period=P31D",
+                    "location=Central India",
+                ],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode != 0:
+                # Database may already exist — that's fine
+                if "already exists" in result.stderr.lower() or "conflict" in result.stderr.lower():
+                    logger.info(f"ADX database already exists: {self.database_name}")
+                else:
+                    logger.error(f"ADX database creation failed: {result.stderr}")
+                    raise RuntimeError(f"Failed to create ADX database: {result.stderr}")
+            else:
+                logger.info(f"ADX database created: {self.database_name}")
             return
         ClickHouseService().create_database_if_not_exists(self.database_name)
 
     def create_raw_events_table(self):
         if self.analytics_backend == "adx":
-            if self._adx_use_shared_db:
-                return self._adx_table_name(self._raw_events_table_name())
+            tbl = self._adx_table_name(self._raw_events_table_name())
             self._get_service().execute(
-                f".create table ['{self._raw_events_table_name()}'] "
+                f".create-merge table {tbl} "
                 f"(event_id: string, user_id: string, event_name: string, "
                 f"event_data: dynamic, client_ts: datetime, server_ts: datetime)"
             )
-            return self._raw_events_table_name()
+            return tbl
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._raw_events_table_name()} (
             event_id String,
@@ -98,14 +96,13 @@ class EventsController(EventsArtefacts):
 
     def create_event_props_table(self):
         if self.analytics_backend == "adx":
-            if self._adx_use_shared_db:
-                return self._adx_table_name(self._event_props_table_name())
+            tbl = self._adx_table_name(self._event_props_table_name())
             self._get_service().execute(
-                f".create table ['{self._event_props_table_name()}'] "
+                f".create-merge table {tbl} "
                 f"(event_id: string, user_id: string, event_name: string, "
                 f"key: string, value: string, client_ts: datetime, server_ts: datetime)"
             )
-            return self._event_props_table_name()
+            return tbl
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._event_props_table_name()} (
             event_id String,
@@ -124,13 +121,12 @@ class EventsController(EventsArtefacts):
 
     def create_user_profile_table(self):
         if self.analytics_backend == "adx":
-            if self._adx_use_shared_db:
-                return self._adx_table_name(self._user_profile_props_table_name())
+            tbl = self._adx_table_name(self._user_profile_props_table_name())
             self._get_service().execute(
-                f".create table ['{self._user_profile_props_table_name()}'] "
+                f".create-merge table {tbl} "
                 f"(user_id: string, key: string, value: string, server_ts: datetime)"
             )
-            return self._user_profile_props_table_name()
+            return tbl
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._user_profile_props_table_name()} (
             user_id String,
@@ -154,15 +150,14 @@ class EventsController(EventsArtefacts):
 
     def create_user_experience_table(self):
         if self.analytics_backend == "adx":
-            if self._adx_use_shared_db:
-                return self._adx_table_name(self._user_experience_table_name())
+            tbl = self._adx_table_name(self._user_experience_table_name())
             self._get_service().execute(
-                f".create table ['{self._user_experience_table_name()}'] "
+                f".create-merge table {tbl} "
                 f"(user_id: string, experience_id: string, personalisation_id: string, "
                 f"personalisation_name: string, experience_variant_id: string, "
                 f"features: dynamic, evaluation_reason: string, assigned_at: datetime)"
             )
-            return self._user_experience_table_name()
+            return tbl
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._user_experience_table_name()} (
             user_id String,
@@ -195,14 +190,12 @@ class EventsController(EventsArtefacts):
             is_adx = self.analytics_backend == "adx"
 
             if raw_events_rows:
-                rows = self._adx_enrich_rows(raw_events_rows) if is_adx else raw_events_rows
                 table = self._adx_table_name(self._raw_events_table_name()) if is_adx else self._raw_events_table_name()
-                svc.insert_rows(table, rows)
+                svc.insert_rows(table, raw_events_rows)
 
             if event_props_rows:
-                rows = self._adx_enrich_rows(event_props_rows) if is_adx else event_props_rows
                 table = self._adx_table_name(self._event_props_table_name()) if is_adx else self._event_props_table_name()
-                svc.insert_rows(table, rows)
+                svc.insert_rows(table, event_props_rows)
 
         except Exception as e:
             logger.error(f"Analytics insertion failed: {str(e)}")
@@ -358,9 +351,8 @@ class EventsController(EventsArtefacts):
         }
 
         is_adx = self.analytics_backend == "adx"
-        rows = self._adx_enrich_rows([user_experience_row]) if is_adx else [user_experience_row]
         table = self._adx_table_name(self._user_experience_table_name()) if is_adx else self._user_experience_table_name()
-        self._get_service().insert_rows(table, rows)
+        self._get_service().insert_rows(table, [user_experience_row])
 
     def track_user_profile(self, user_id: str, old_profile: dict, user_profile: dict):
         changed_profile = {
@@ -396,28 +388,24 @@ class EventsController(EventsArtefacts):
             ]
 
             is_adx = self.analytics_backend == "adx"
-            rows = self._adx_enrich_rows(user_profile_rows) if is_adx else user_profile_rows
             table = self._adx_table_name(self._user_profile_props_table_name()) if is_adx else self._user_profile_props_table_name()
-            self._get_service().insert_rows(table, rows)
+            self._get_service().insert_rows(table, user_profile_rows)
 
     def create_business_metrics_table(self):
         if self.analytics_backend == "adx":
-            if self._adx_use_shared_db:
-                return self._adx_table_name(self._business_metrics_table_name())
+            tbl = self._adx_table_name(self._business_metrics_table_name())
             try:
                 self._get_service().execute(
-                    f".create table ['{self._business_metrics_table_name()}'] "
+                    f".create-merge table {tbl} "
                     f"(metric_name: string, dimension: string, value: real, "
                     f"currency: string, scenario_id: string, period_start: datetime, "
                     f"created_at: datetime)"
                 )
-                logger.info(
-                    f"Business metrics table created/confirmed (ADX): {self._business_metrics_table_name()}"
-                )
+                logger.info(f"Business metrics table created/confirmed (ADX): {tbl}")
             except Exception as e:
                 logger.error(f"Failed to create business metrics table (ADX): {str(e)}")
                 raise e
-            return self._business_metrics_table_name()
+            return tbl
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self._business_metrics_table_name()} (
             metric_name String,
@@ -466,9 +454,8 @@ class EventsController(EventsArtefacts):
 
         try:
             is_adx = self.analytics_backend == "adx"
-            rows = self._adx_enrich_rows(ch_rows) if is_adx else ch_rows
             table = self._adx_table_name(self._business_metrics_table_name()) if is_adx else self._business_metrics_table_name()
-            self._get_service().insert_rows(table, rows)
+            self._get_service().insert_rows(table, ch_rows)
         except Exception as e:
             logger.error(f"Analytics insertion failed for business metrics: {e}")
             raise
