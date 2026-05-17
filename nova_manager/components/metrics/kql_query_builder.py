@@ -155,6 +155,7 @@ class KQLQueryBuilder(EventsArtefacts):
         lines.append(
             f"| join kind=leftouter ("
             f"{self._event_props_table_name()} | where event_name == '{event_name}' and key == '{prop}'"
+            f" | project event_id, prop_value = value"
             f") on event_id"
         )
 
@@ -168,7 +169,7 @@ class KQLQueryBuilder(EventsArtefacts):
         lines.append(f"| where {' and '.join(where_parts)}")
 
         # Summarize
-        agg_expr = f"{aggregation}(todouble(value1))"
+        agg_expr = f"{aggregation}(todouble(prop_value))"
         summarize_by = [f"period = {bucket}"]
         summarize_by.extend(self._group_by_columns(group_by))
         lines.append(f"| summarize value = {agg_expr} by {', '.join(summarize_by)}")

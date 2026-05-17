@@ -109,7 +109,7 @@ class TestKQLAggregationQuery:
             "property": "amount", "aggregation": agg,
             "time_range": TR, "granularity": "daily", "group_by": [], "filters": {},
         })
-        assert f"{agg}(todouble(" in kql
+        assert f"{agg}(todouble(prop_value))" in kql
 
     def test_joins_event_props(self):
         kql = _qb().build_query("aggregation", {
