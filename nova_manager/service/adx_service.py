@@ -6,7 +6,7 @@ from azure.kusto.ingest.ingestion_properties import DataFormat
 import io
 import json
 
-from nova_manager.core.config import ADX_CLUSTER_URI, ADX_DATABASE
+from nova_manager.core.config import ADX_CLUSTER_URI, ADX_DATABASE, ADX_INGEST_MODE
 from nova_manager.core.log import logger
 from nova_manager.service.analytics_service import AnalyticsService
 
@@ -41,8 +41,11 @@ class ADXService(AnalyticsService):
         if not rows:
             return []
 
+        if ADX_INGEST_MODE == "inline":
+            self._insert_rows_inline(table_name, rows)
+            return []
+
         try:
-            # Convert rows to newline-delimited JSON for ingestion
             json_lines = "\n".join(json.dumps(row) for row in rows)
             stream = io.StringIO(json_lines)
 
@@ -58,6 +61,21 @@ class ADXService(AnalyticsService):
             raise
 
         return []
+
+    def _insert_rows_inline(self, table_name: str, rows: list[dict]):
+        # Synchronous mgmt-plane ingest: rows are queryable as soon as this returns.
+        # Intended for tests (set ADX_INGEST_MODE=inline). Subject to a per-command
+        # payload cap; callers in tests stay well under it.
+        json_lines = "\n".join(json.dumps(row) for row in rows)
+        command = (
+            f".ingest inline into table {table_name} "
+            f"with (format='multijson') <|\n{json_lines}"
+        )
+        try:
+            self.query_client.execute_mgmt(self._database, command)
+        except Exception as e:
+            logger.error(f"ADX inline ingestion failed for {table_name}: {e}")
+            raise
 
     def run_query(self, query: str) -> list[dict]:
         try:

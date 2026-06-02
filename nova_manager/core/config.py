@@ -20,6 +20,7 @@ ALLOWED_ORIGINS = [o.strip() for o in (getenv("ALLOWED_ORIGINS") or "*").split("
 ADX_CLUSTER_URI = getenv("ADX_CLUSTER_URI") or ""
 ADX_DATABASE = getenv("ADX_DATABASE") or ""
 ADX_TENANT_ID = getenv("ADX_TENANT_ID") or ""
+ADX_INGEST_MODE = (getenv("ADX_INGEST_MODE") or "queued").lower()
 
 NOTICE_SERVICE_URL = getenv("NOTICE_SERVICE_URL") or "http://localhost:8001"
 NOTICE_SERVICE_SECRET = getenv("NOTICE_SERVICE_SECRET") or ""
