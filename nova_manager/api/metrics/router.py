@@ -31,6 +31,7 @@ from nova_manager.components.auth.dependencies import (
     require_sdk_app_context,
 )
 from nova_manager.core.security import AuthContext, SDKAuthContext
+from nova_manager.core.log import logger
 from sqlalchemy.orm import Session
 
 
@@ -234,6 +235,7 @@ async def list_business_data_schema(
     table = controller._business_metrics_table_name()
 
     if backend == "adx":
+        table = controller._adx_table_name(table)
         query = f"{table} | distinct metric_name, dimension, scenario_id"
         if scenario_id:
             safe_scenario = QueryBuilder._sql_safe_identifier(scenario_id, "scenario_id")
@@ -249,8 +251,10 @@ async def list_business_data_schema(
     try:
         db_name = (ADX_DATABASE or controller.database_name) if backend == "adx" else None
         result = get_analytics_service(backend, database=db_name).run_query(query)
-    except Exception:
-        # Table may not exist yet if no business data has been ingested
+    except Exception as e:
+        # Table may not exist yet if no business data has been ingested.
+        # Log so the swallow doesn't hide unrelated errors.
+        logger.warning(f"business-data/schema query failed: {e}")
         return []
     return result
 
