@@ -2,6 +2,7 @@ from uuid import UUID as UUIDType
 from sqlalchemy import UUID, String, ForeignKey, Enum, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from nova_manager.core.config import NOVA_DEFAULT_ANALYTICS_BACKEND
 from nova_manager.core.models import BaseModel
 from nova_manager.core.enums import UserRole
 
@@ -34,7 +35,10 @@ class App(BaseModel):
         UUID, ForeignKey("organisations.pid"), nullable=False, index=True
     )  # Frequent org filtering
     analytics_backend: Mapped[str] = mapped_column(
-        String, nullable=False, default="clickhouse", server_default="clickhouse"
+        String,
+        nullable=False,
+        default=lambda: NOVA_DEFAULT_ANALYTICS_BACKEND,
+        server_default="clickhouse",
     )
 
     organisation = relationship(

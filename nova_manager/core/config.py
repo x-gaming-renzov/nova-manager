@@ -22,6 +22,12 @@ ADX_DATABASE = getenv("ADX_DATABASE") or ""
 ADX_TENANT_ID = getenv("ADX_TENANT_ID") or ""
 ADX_INGEST_MODE = (getenv("ADX_INGEST_MODE") or "queued").lower()
 
+# Default analytics backend for newly-created apps. Can be overridden
+# per-app in the apps.analytics_backend column.
+NOVA_DEFAULT_ANALYTICS_BACKEND = (
+    getenv("NOVA_DEFAULT_ANALYTICS_BACKEND") or "clickhouse"
+).lower()
+
 NOTICE_SERVICE_URL = getenv("NOTICE_SERVICE_URL") or "http://localhost:8001"
 NOTICE_SERVICE_SECRET = getenv("NOTICE_SERVICE_SECRET") or ""
 
