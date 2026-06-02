@@ -29,10 +29,13 @@ class EventsController(EventsArtefacts):
 
     def _get_service(self):
         """Return the analytics service for the configured backend.
-        For ADX, targets the per-org/app database."""
+        For ADX, targets the per-org/app database.
+        ADX_DATABASE env var overrides the derived name (useful for testing)."""
         if self.analytics_backend == "adx":
+            from nova_manager.core.config import ADX_DATABASE
             from nova_manager.service.adx_service import ADXService
-            return ADXService(database=self.database_name)
+            db = ADX_DATABASE if ADX_DATABASE else self.database_name
+            return ADXService(database=db)
         return get_analytics_service(self.analytics_backend)
 
     def _adx_table_name(self, ch_table: str) -> str:
@@ -41,6 +44,10 @@ class EventsController(EventsArtefacts):
 
     def create_database(self):
         if self.analytics_backend == "adx":
+            from nova_manager.core.config import ADX_DATABASE
+            if ADX_DATABASE:
+                logger.info(f"ADX: using ADX_DATABASE override ({ADX_DATABASE}), skipping DB creation")
+                return
             import subprocess
             from nova_manager.core.config import ADX_CLUSTER_URI
             # Use ARM API (az kusto database create) — Kusto control plane

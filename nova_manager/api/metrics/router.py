@@ -133,7 +133,8 @@ async def compute_metric(
     query = query_builder.build_query(type, config)
 
     from nova_manager.components.metrics.artefacts import EventsArtefacts
-    db_name = EventsArtefacts(organisation_id, app_id).database_name if backend == "adx" else None
+    from nova_manager.core.config import ADX_DATABASE
+    db_name = (ADX_DATABASE or EventsArtefacts(organisation_id, app_id).database_name) if backend == "adx" else None
     analytics_service = get_analytics_service(backend, database=db_name)
     result = analytics_service.run_query(query)
 
@@ -227,6 +228,7 @@ async def list_business_data_schema(
     scenario_id: str = Query(None, description="Filter to a specific scenario"),
 ):
     """List distinct metric_name + dimension + scenario_id combinations from business_metrics table."""
+    from nova_manager.core.config import ADX_DATABASE
     backend = auth.analytics_backend
     controller = EventsController(auth.organisation_id, auth.app_id, backend)
     table = controller._business_metrics_table_name()
@@ -245,7 +247,7 @@ async def list_business_data_schema(
         query += " ORDER BY scenario_id, metric_name, dimension"
 
     try:
-        db_name = controller.database_name if backend == "adx" else None
+        db_name = (ADX_DATABASE or controller.database_name) if backend == "adx" else None
         result = get_analytics_service(backend, database=db_name).run_query(query)
     except Exception:
         # Table may not exist yet if no business data has been ingested
