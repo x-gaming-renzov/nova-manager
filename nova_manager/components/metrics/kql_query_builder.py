@@ -613,7 +613,7 @@ class KQLQueryBuilder(EventsArtefacts):
                 f"| join kind=leftouter ("
                 f"{self._user_experience_table_name()} "
                 f"| summarize arg_max(assigned_at, {key}) by user_id "
-                f"| project user_id, {key} = {key}1"
+                f"| project user_id, {key}"
                 f") on user_id"
             )
         elif source == KeySource.USER_PROFILE:
@@ -622,7 +622,7 @@ class KQLQueryBuilder(EventsArtefacts):
                 f"{self._user_profile_props_table_name()} "
                 f"| where key == '{key}' "
                 f"| summarize arg_max(server_ts, value) by user_id "
-                f"| project user_id, {key} = value1"
+                f"| project user_id, {key} = value"
                 f") on user_id"
             )
         return None
