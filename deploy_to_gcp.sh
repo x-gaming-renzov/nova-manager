@@ -22,16 +22,10 @@ ADX_CLUSTER_URI="https://kresadxdev.centralindia.kusto.windows.net"
 ADX_TENANT_ID="1a27bdbf-e6cc-4e33-85d2-e1c81bad930a"
 ### ────────────────────────────────────────────────────────────
 
-# Get data VM internal IP for ClickHouse env vars
-DATA_VM_IP=$(gcloud compute instances describe nova-data \
-  --zone="${REGION}-a" --project="$PROJECT_ID" \
-  --format='value(networkInterfaces[0].networkIP)')
-
 echo "=== Config ==="
 echo "  Project:    $PROJECT_ID"
 echo "  Region:     $REGION"
 echo "  Tag:        $TAG"
-echo "  Data VM IP: $DATA_VM_IP"
 echo ""
 
 # 1. Configure gcloud
@@ -70,34 +64,7 @@ else
     --execute-now --wait
 fi
 
-# 4. Run ClickHouse bootstrap (Cloud Run Job)
-echo "=== Bootstrapping ClickHouse ==="
-if gcloud run jobs describe nova-clickhouse-bootstrap --region="$REGION" --project="$PROJECT_ID" 2>/dev/null; then
-  gcloud run jobs update nova-clickhouse-bootstrap \
-    --image="$FULL_IMAGE" \
-    --region="$REGION" \
-    --project="$PROJECT_ID"
-  gcloud run jobs execute nova-clickhouse-bootstrap \
-    --region="$REGION" \
-    --project="$PROJECT_ID" \
-    --wait
-else
-  gcloud run jobs create nova-clickhouse-bootstrap \
-    --image="$FULL_IMAGE" \
-    --command="python" \
-    --args="scripts/bootstrap_clickhouse.py" \
-    --set-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
-    --vpc-connector="$VPC_CONNECTOR" \
-    --set-secrets="DATABASE_URL=DATABASE_URL:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest,AZURE_CLIENT_ID=AZURE_CLIENT_ID:latest,AZURE_CLIENT_SECRET=AZURE_CLIENT_SECRET:latest" \
-    --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=/app,ADX_CLUSTER_URI=${ADX_CLUSTER_URI},ADX_TENANT_ID=${ADX_TENANT_ID},AZURE_TENANT_ID=${ADX_TENANT_ID}" \
-    --service-account="$SA_EMAIL" \
-    --region="$REGION" \
-    --project="$PROJECT_ID" \
-    --max-retries=0 \
-    --execute-now --wait
-fi
-
-# 5. Deploy API
+# 4. Deploy API
 echo "=== Deploying API ==="
 gcloud run deploy "$IMAGE_NAME" \
   --image="$FULL_IMAGE" \
@@ -107,8 +74,8 @@ gcloud run deploy "$IMAGE_NAME" \
   --add-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
   --vpc-connector="$VPC_CONNECTOR" \
   --service-account="$SA_EMAIL" \
-  --set-secrets="DATABASE_URL=DATABASE_URL:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,BREVO_API_KEY=BREVO_API_KEY:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest,NOTICE_SERVICE_SECRET=NOTICE_SERVICE_SECRET:latest,NOTICE_SERVICE_URL=NOTICE_SERVICE_URL:latest,AZURE_CLIENT_ID=AZURE_CLIENT_ID:latest,AZURE_CLIENT_SECRET=AZURE_CLIENT_SECRET:latest" \
-  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,ADX_CLUSTER_URI=${ADX_CLUSTER_URI},ADX_TENANT_ID=${ADX_TENANT_ID},AZURE_TENANT_ID=${ADX_TENANT_ID}" \
+  --set-secrets="DATABASE_URL=DATABASE_URL:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,BREVO_API_KEY=BREVO_API_KEY:latest,NOTICE_SERVICE_SECRET=NOTICE_SERVICE_SECRET:latest,NOTICE_SERVICE_URL=NOTICE_SERVICE_URL:latest,AZURE_CLIENT_ID=AZURE_CLIENT_ID:latest,AZURE_CLIENT_SECRET=AZURE_CLIENT_SECRET:latest" \
+  --set-env-vars="ADX_CLUSTER_URI=${ADX_CLUSTER_URI},ADX_TENANT_ID=${ADX_TENANT_ID},AZURE_TENANT_ID=${ADX_TENANT_ID}" \
   --memory=512Mi \
   --cpu=1 \
   --min-instances=0 \
@@ -117,7 +84,7 @@ gcloud run deploy "$IMAGE_NAME" \
   --port=8000 \
   --project="$PROJECT_ID"
 
-# 6. Deploy Worker
+# 5. Deploy Worker
 echo "=== Deploying Worker ==="
 gcloud run deploy "nova-manager-worker" \
   --image="$FULL_IMAGE" \
@@ -129,8 +96,8 @@ gcloud run deploy "nova-manager-worker" \
   --add-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
   --vpc-connector="$VPC_CONNECTOR" \
   --service-account="$SA_EMAIL" \
-  --set-secrets="DATABASE_URL=DATABASE_URL:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest,NOTICE_SERVICE_SECRET=NOTICE_SERVICE_SECRET:latest,NOTICE_SERVICE_URL=NOTICE_SERVICE_URL:latest,AZURE_CLIENT_ID=AZURE_CLIENT_ID:latest,AZURE_CLIENT_SECRET=AZURE_CLIENT_SECRET:latest" \
-  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=/app,ADX_CLUSTER_URI=${ADX_CLUSTER_URI},ADX_TENANT_ID=${ADX_TENANT_ID},AZURE_TENANT_ID=${ADX_TENANT_ID}" \
+  --set-secrets="DATABASE_URL=DATABASE_URL:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,NOTICE_SERVICE_SECRET=NOTICE_SERVICE_SECRET:latest,NOTICE_SERVICE_URL=NOTICE_SERVICE_URL:latest,AZURE_CLIENT_ID=AZURE_CLIENT_ID:latest,AZURE_CLIENT_SECRET=AZURE_CLIENT_SECRET:latest" \
+  --set-env-vars="ADX_CLUSTER_URI=${ADX_CLUSTER_URI},ADX_TENANT_ID=${ADX_TENANT_ID},AZURE_TENANT_ID=${ADX_TENANT_ID},PYTHONPATH=/app" \
   --cpu=1 \
   --memory=512Mi \
   --no-cpu-throttling \
@@ -140,7 +107,7 @@ gcloud run deploy "nova-manager-worker" \
   --port=8080 \
   --project="$PROJECT_ID"
 
-# 7. Notice Service (runs on a dedicated GCE VM, NOT Cloud Run)
+# 6. Notice Service (runs on a dedicated GCE VM, NOT Cloud Run)
 # The notice service maintains persistent SSE connections, so it needs
 # a single long-lived process — not Cloud Run's ephemeral containers.
 #
@@ -155,11 +122,11 @@ gcloud run deploy "nova-manager-worker" \
 #   NOTICE_SERVICE_SECRET  (shared secret, must match Cloud Run's NOTICE_SERVICE_SECRET)
 #   PORT                   (default: 8001)
 #
-# Required env vars on Cloud Run (steps 5 & 6):
+# Required env vars on Cloud Run (steps 4 & 5):
 #   NOTICE_SERVICE_URL     (VM internal IP, e.g. http://10.128.0.2:8001)
 #   NOTICE_SERVICE_SECRET  (shared secret, must match the VM's value)
 
-# 8. Get URL and run smoke test
+# 7. Get URL and run smoke test
 API_URL=$(gcloud run services describe "$IMAGE_NAME" \
   --region="$REGION" --project="$PROJECT_ID" \
   --format='value(status.url)')
