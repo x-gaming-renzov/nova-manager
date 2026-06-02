@@ -4,3 +4,4 @@ venv/*
 .env
 google-application-credentials.json
 dump.rdb
+scripts/migration_data/
