@@ -132,7 +132,9 @@ async def compute_metric(
     query_builder = get_query_builder(backend, organisation_id, app_id)
     query = query_builder.build_query(type, config)
 
-    analytics_service = get_analytics_service(backend)
+    from nova_manager.components.metrics.artefacts import EventsArtefacts
+    db_name = EventsArtefacts(organisation_id, app_id).database_name if backend == "adx" else None
+    analytics_service = get_analytics_service(backend, database=db_name)
     result = analytics_service.run_query(query)
 
     return result
@@ -243,7 +245,8 @@ async def list_business_data_schema(
         query += " ORDER BY scenario_id, metric_name, dimension"
 
     try:
-        result = get_analytics_service(backend).run_query(query)
+        db_name = controller.database_name if backend == "adx" else None
+        result = get_analytics_service(backend, database=db_name).run_query(query)
     except Exception:
         # Table may not exist yet if no business data has been ingested
         return []
