@@ -243,30 +243,46 @@ Also — **prod uses `QueuedIngestClient` with default batching policy** (`adx_s
 
 ## 6. Operational tasks not done yet
 
-### Drift backfill: ~14K CH rows not in ADX (Batlin app)
+### Backfill status (Batlin app, post-2026-06-03 session)
 
-As of 2026-06-03:
+As of after this session:
 
-| Table | ClickHouse | ADX | Delta |
-|---|---:|---:|---:|
-| `raw_events` | 10,814 | 8,436 | 2,378 |
-| `event_props` | 26,397 | 20,739 | 5,658 |
-| `user_profile_props` | 7,768 | 5,849 | 1,919 |
-| `user_experience` | 18,092 | 14,318 | 3,774 |
-| `business_metrics` | 128 | 128 | 0 |
-| **Total** | **63,199** | **49,470** | **13,729** |
+| Table | ClickHouse | ADX | Status |
+|---|---:|---:|---|
+| `raw_events` | 10,814 | 8,436 | **22% historical gap** (see below) |
+| `event_props` | 26,397 | 20,739 | ~21% historical gap |
+| `user_profile_props` | 7,768 | 5,849 | ~25% historical gap |
+| `user_experience` | 18,092 | 18,092 | **backfilled this session ✓** |
+| `business_metrics` | 128 | 128 | match |
 
-These are events that went into CH between May 17 (when the original migration ran) and the Batlin ADX cutover date. They need to be copied across before CH can be retired.
+**`user_experience` was backfilled** with `scripts/backfill_ch_to_adx_incremental.py` — 3,774 rows. A bug was also fixed in `nova_manager/components/user_experience/crud_async.py:115-120`: the `EventsController` there was instantiated without `analytics_backend`, defaulting to `"clickhouse"`. Every user_experience write was bypassing per-app routing and going to CH, regardless of the app's setting. Commit `f24b32d`.
+
+**The remaining 3 tables have a different kind of gap — historical, not drift.** Investigation:
+
+- ADX `max(server_ts)` for raw_events: 2026-06-02 (after CH's max of 2026-06-01) — confirms writes ARE going to ADX correctly now.
+- ADX has 8,412 *distinct* event_ids vs CH's 10,814. So 2,402 event_ids exist in CH but not ADX.
+- These are scattered across the time range — they're rows that hit CH between the May 17 migration and the Batlin ADX cutover (~June 1-2), when writes were CH-only.
+- ADX also has 24 duplicate event_id rows (from the original queued ingest re-trying).
+
+**To complete the historical backfill** (out of scope this session, but the approach is clear):
+
+```python
+# Sketch — for raw_events, event_props (PK = event_id):
+adx_ids = set of adx event_ids   # ~8K, fits in memory
+ch_rows = SELECT * FROM ch WHERE event_id NOT IN adx_ids
+inline_ingest into adx (in batches)
+
+# For user_profile_props (no single PK):
+# Use composite (user_id, key, server_ts) or hash-based dedup.
+```
+
+Total to backfill: ~10K rows across 3 tables. Plus the 24 ADX dupes to clean up (use `.purge table ... predicate ... ` with a Kusto admin role).
 
 **Constraint:** ClickHouse ops are READ-ONLY. Do not INSERT/UPDATE/DELETE/ALTER/DROP/TRUNCATE on CH. CH is the backup/fallback until ADX is fully trusted. SELECT only.
 
-**Approach (incremental, idempotent):**
-1. For each table, find `max(server_ts)` (or `max(client_ts)`, or `max(assigned_at)` for `user_experience`) in ADX. That's the watermark.
-2. SELECT rows from CH where `ts > watermark`.
-3. INSERT into ADX (append, no DROP). Inline ingest is fine for ~14K rows total.
-4. Verify counts.
+**Whether this matters:** depends on whether anyone queries pre-June Batlin data. Currently a testing surface, so probably not urgent. Required before CH can be retired.
 
-The existing `scripts/migrate_ch_to_adx.py` uses drop-and-recreate on ADX — **don't use it for drift backfill** (would wipe the 49K ADX rows). Write a separate script or add an `--incremental` flag.
+**Idempotent timestamp-based drift script (this session):** `scripts/backfill_ch_to_adx_incremental.py`. Safe to re-run; uses watermark approach. Handles user_experience and would handle any future drift in the other tables. Does NOT handle the historical gap (which has rows inside the existing time range).
 
 ### Smoke user cleanup (deferred, low priority)
 
