@@ -1,14 +1,34 @@
 from azure.identity import DefaultAzureCredential
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+from azure.kusto.data.client_request_properties import ClientRequestProperties
 from azure.kusto.ingest import QueuedIngestClient, IngestionProperties
 from azure.kusto.ingest.ingestion_properties import DataFormat
 
 import io
 import json
+from datetime import timedelta
 
 from nova_manager.core.config import ADX_CLUSTER_URI, ADX_DATABASE, ADX_INGEST_MODE
 from nova_manager.core.log import logger
 from nova_manager.service.analytics_service import AnalyticsService
+
+# Cap how long Nova will wait for ADX to respond. Without this, the Kusto
+# SDK can block indefinitely on a half-closed socket and starve FastAPI's
+# threadpool, taking the whole API down.
+_KUSTO_QUERY_TIMEOUT = timedelta(seconds=30)
+_KUSTO_MGMT_TIMEOUT = timedelta(minutes=1)  # mgmt commands (table create, .ingest inline) can be slower
+
+
+def _query_props() -> ClientRequestProperties:
+    props = ClientRequestProperties()
+    props.set_option(ClientRequestProperties.request_timeout_option_name, _KUSTO_QUERY_TIMEOUT)
+    return props
+
+
+def _mgmt_props() -> ClientRequestProperties:
+    props = ClientRequestProperties()
+    props.set_option(ClientRequestProperties.request_timeout_option_name, _KUSTO_MGMT_TIMEOUT)
+    return props
 
 
 class ADXService(AnalyticsService):
@@ -72,14 +92,14 @@ class ADXService(AnalyticsService):
             f"with (format='multijson') <|\n{json_lines}"
         )
         try:
-            self.query_client.execute_mgmt(self._database, command)
+            self.query_client.execute_mgmt(self._database, command, _mgmt_props())
         except Exception as e:
             logger.error(f"ADX inline ingestion failed for {table_name}: {e}")
             raise
 
     def run_query(self, query: str) -> list[dict]:
         try:
-            result = self.query_client.execute_query(self._database, query)
+            result = self.query_client.execute_query(self._database, query, _query_props())
 
             if not result.primary_results or not result.primary_results[0]:
                 return []
@@ -97,7 +117,7 @@ class ADXService(AnalyticsService):
 
     def execute(self, statement: str):
         try:
-            self.query_client.execute_mgmt(self._database, statement)
+            self.query_client.execute_mgmt(self._database, statement, _mgmt_props())
         except Exception as e:
             logger.error(f"ADX management command failed: {e}")
             raise
