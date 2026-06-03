@@ -79,7 +79,7 @@ async def track_events(
 
 
 @router.post("/compute/", response_model=List[Dict])
-async def compute_metric(
+def compute_metric(
     compute_request: ComputeMetricRequest,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
@@ -199,7 +199,7 @@ async def list_user_profile_keys(
 
 
 @router.post("/business-data/")
-async def ingest_business_data(
+def ingest_business_data(
     request: IngestBusinessDataRequest,
     auth: AuthContext = Depends(require_app_context),
 ):
@@ -224,7 +224,7 @@ async def ingest_business_data(
 
 
 @router.get("/business-data/schema/")
-async def list_business_data_schema(
+def list_business_data_schema(
     auth: AuthContext = Depends(require_app_context),
     scenario_id: str = Query(None, description="Filter to a specific scenario"),
 ):
