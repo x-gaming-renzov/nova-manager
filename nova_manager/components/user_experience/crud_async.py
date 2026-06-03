@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from nova_manager.components.user_experience.models import UserExperience
 from nova_manager.queues.controller import QueueController
 from nova_manager.components.metrics.events_controller import EventsController
+from nova_manager.components.auth.dependencies import _lookup_analytics_backend
 
 
 class UserExperienceAsyncCRUD:
@@ -109,16 +110,17 @@ class UserExperienceAsyncCRUD:
             res = await self.db.execute(sel)
             instances = list(res.scalars().all())
 
-            # Enqueue a task per inserted instance using the existing EventsController
+            # Enqueue a task per inserted instance using the existing EventsController.
+            # Look up analytics_backend per-app — without this, every write would
+            # default to ClickHouse and bypass per-app routing.
             for inst in instances:
                 try:
+                    backend = _lookup_analytics_backend(str(inst.app_id))
                     QueueController().add_task(
-                        EventsController(inst.organisation_id, inst.app_id).track_user_experience,
+                        EventsController(inst.organisation_id, inst.app_id, backend).track_user_experience,
                         inst,
                         external_user_id=external_user_id,
                     )
                 except Exception:
-                    # Swallow enqueue errors; ClickHouse failure should not break main flow
-                    # Logging is deliberately omitted here to keep this method lightweight;
-                    # higher-level callers already log errors around DB operations.
+                    # Swallow enqueue errors; analytics-backend failure should not break main flow
                     pass
