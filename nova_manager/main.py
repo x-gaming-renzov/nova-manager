@@ -1,8 +1,12 @@
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
+
+from nova_manager.core.admin_key import require_docs_access
 
 from nova_manager.core.exceptions import (
     RequestValidationException,
@@ -27,14 +31,33 @@ from nova_manager.api.personalisations.router import router as personalisations_
 from nova_manager.api.recommendations.router import router as recommendations_router
 from nova_manager.api.invitations.router import router as invitations_router
 from nova_manager.api.simulations.router import router as simulations_router
+from nova_manager.api.admin.router import router as admin_router
 
 
 configure_logging()
-app = FastAPI()
+# Disable the built-in public docs; they're re-exposed below behind the admin
+# key so the schema isn't readable by anyone who hits the host.
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="nova_manager/static"), name="static")
+
+
+# --- Access-key-gated API docs (HTTP Basic; password = NOVA_ADMIN_KEY) --------
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_json(_: None = Depends(require_docs_access)):
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_docs(_: None = Depends(require_docs_access)):
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="Nova Manager — API docs")
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_docs(_: None = Depends(require_docs_access)):
+    return get_redoc_html(openapi_url="/openapi.json", title="Nova Manager — API docs")
 
 
 # Include Routers
@@ -49,6 +72,7 @@ app.include_router(personalisations_router, prefix="/api/v1/personalisations")
 app.include_router(recommendations_router, prefix="/api/v1/recommendations")
 app.include_router(invitations_router, prefix="/api/v1/invitations")
 app.include_router(simulations_router, prefix="/api/v1/simulations")
+app.include_router(admin_router, prefix="/api/v1/admin")
 
 
 @app.get("/health")

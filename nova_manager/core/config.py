@@ -17,6 +17,11 @@ BREVO_API_KEY = getenv("BREVO_API_KEY") or ""
 SDK_BACKEND_URL = getenv("SDK_BACKEND_URL") or ""
 ALLOWED_ORIGINS = [o.strip() for o in (getenv("ALLOWED_ORIGINS") or "*").split(",")]
 
+# Shared secret gating the API docs (/docs, /redoc, /openapi.json), self-service
+# /register, and the destructive admin cleanup endpoint. Set per environment;
+# when unset the gated surfaces fail closed (deny) rather than fall open.
+NOVA_ADMIN_KEY = getenv("NOVA_ADMIN_KEY") or ""
+
 NOTICE_SERVICE_URL = getenv("NOTICE_SERVICE_URL") or "http://localhost:8001"
 NOTICE_SERVICE_SECRET = getenv("NOTICE_SERVICE_SECRET") or ""
 

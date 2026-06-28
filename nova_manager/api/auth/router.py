@@ -36,13 +36,18 @@ from nova_manager.core.security import (
 )
 from nova_manager.core.config import SDK_BACKEND_URL
 from nova_manager.core.log import logger
+from nova_manager.core.admin_key import require_admin_key
 
 router = APIRouter()
 
 
-@router.post("/register", response_model=TokenResponse)
+@router.post(
+    "/register",
+    response_model=TokenResponse,
+    dependencies=[Depends(require_admin_key)],
+)
 async def register(user_data: AuthUserRegister, db: Session = Depends(get_db)):
-    """Register a new user"""
+    """Register a new user. Gated by the shared admin key (X-Nova-Admin-Key)."""
     auth_crud = AuthCRUD(db)
 
     # Check if user already exists
