@@ -31,7 +31,7 @@ echo "  Data VM IP: $DATA_VM_IP"
 echo ""
 
 # 1. Configure gcloud
-gcloud config set account pranaypandit12@gmail.com
+gcloud config set account tyrongamess@gmail.com
 gcloud config set project "$PROJECT_ID"
 gcloud config set run/region "$REGION"
 
