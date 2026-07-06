@@ -33,6 +33,9 @@ class App(BaseModel):
     organisation_id: Mapped[UUIDType] = mapped_column(
         UUID, ForeignKey("organisations.pid"), nullable=False, index=True
     )  # Frequent org filtering
+    analytics_backend: Mapped[str] = mapped_column(
+        String, nullable=False, default="clickhouse", server_default="clickhouse"
+    )
 
     organisation = relationship(
         "Organisation",
