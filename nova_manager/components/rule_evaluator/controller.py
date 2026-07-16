@@ -237,7 +237,9 @@ class RuleEvaluator:
         elif operator == "not_in":
             return actual_value not in expected_value
         elif operator == "contains":
-            return actual_value is not None and expected_value in str(actual_value)
+            # str() BOTH sides: a numeric-looking value (e.g. a phone 9876543210
+            # stored as an int) must not raise `int in str`; compare as strings.
+            return actual_value is not None and str(expected_value) in str(actual_value)
         elif operator == "starts_with":
             return actual_value is not None and str(actual_value).startswith(str(expected_value))
         elif operator == "ends_with":
