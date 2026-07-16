@@ -339,6 +339,42 @@ class PersonalisationsCRUD(BaseCRUD):
             .first()
         )
 
+    def reorder_personalisations(
+        self, experience_id: UUIDType, ordered_pids: List[UUIDType]
+    ) -> Optional[List[Personalisations]]:
+        """Reorder an experience's personalisations by rewriting priorities.
+
+        ``ordered_pids`` is top-first (index 0 = UI #1 = highest priority =
+        served first). The top entry gets the highest integer, since Nova serves
+        ``ORDER BY priority DESC``. ``ordered_pids`` must be an exact permutation
+        of this experience's personalisations — returns None otherwise.
+
+        Two-phase to dodge transient collisions on the unique
+        ``(experience_id, priority)`` constraint: park every row at a distinct
+        negative priority, then assign the final descending positives.
+        """
+        personalisations = (
+            self.db.query(Personalisations)
+            .filter(Personalisations.experience_id == experience_id)
+            .all()
+        )
+        by_pid = {p.pid: p for p in personalisations}
+        if set(ordered_pids) != set(by_pid):
+            return None
+
+        n = len(ordered_pids)
+        for i, pid in enumerate(ordered_pids):  # phase 1: park at unique negatives
+            by_pid[pid].priority = -(i + 1)
+        self.db.flush()
+        for i, pid in enumerate(ordered_pids):  # phase 2: top = highest, descending
+            p = by_pid[pid]
+            p.priority = n - i
+            p.reassign = True  # order changed → re-evaluate cached assignments
+            self.db.add(p)
+        self.db.flush()
+
+        return [by_pid[pid] for pid in ordered_pids]
+
     def disable_personalisation(
         self, personalisation: Personalisations
     ) -> Optional[Personalisations]:

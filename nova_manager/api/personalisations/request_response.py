@@ -40,6 +40,12 @@ class SegmentRuleResponse(BaseModel):
  
 
 
+class ReorderPersonalisationsRequest(BaseModel):
+    experience_id: UUIDType
+    # Top-first: index 0 = UI #1 = highest priority = served first.
+    ordered_pids: List[UUIDType]
+
+
 class PersonalisationCreate(BaseModel):
     name: str
     description: str
