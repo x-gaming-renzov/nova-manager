@@ -4,3 +4,9 @@ venv/*
 .env
 google-application-credentials.json
 dump.rdb
+
+# Local ops artifacts — never commit or ship (DB dumps, proxies, logs, one-off scripts)
+nova_manager_backup*.sql
+*.exe
+*.log
+scripts/cleanup_app_experiences.py
