@@ -333,6 +333,40 @@ async def list_personalised_experiences(
     return personalisations
 
 
+# Declared before /{pid}/ — FastAPI matches in declaration order, so the literal
+# route must come first or "reorder" binds to pid and 422s on UUID parsing.
+@router.patch("/reorder/", response_model=List[PersonalisationDetailedResponse])
+async def reorder_personalisations(
+    body: ReorderPersonalisationsRequest,
+    auth: AuthContext = Depends(require_app_context),
+    db: Session = Depends(get_db),
+):
+    """
+    Reorder an experience's personalisations. ``ordered_pids`` is top-first
+    (index 0 = highest priority = served first) and must be an exact permutation
+    of the experience's personalisations. Returns them in the new order.
+    """
+    exp = ExperiencesCRUD(db).get_by_pid(body.experience_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Experience not found")
+    if str(exp.organisation_id) != str(auth.organisation_id) or exp.app_id != auth.app_id:
+        raise HTTPException(status_code=403, detail="Not in your app")
+
+    result = PersonalisationsCRUD(db).reorder_personalisations(
+        body.experience_id, body.ordered_pids
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=400,
+            detail="ordered_pids must be exactly this experience's personalisations",
+        )
+
+    # ponytail: no notice-service push here — reorder sets reassign=True, so users
+    # re-resolve on their next fetch. Add a push (verified event type) if/when the
+    # live preview needs instant refresh.
+    return result
+
+
 @router.patch("/{pid}/", response_model=PersonalisationDetailedResponse)
 async def update_personalisation(
     pid: UUID,
@@ -476,38 +510,6 @@ async def disable_personalisation(
         )
 
     return updated
-
-
-@router.patch("/reorder/", response_model=List[PersonalisationDetailedResponse])
-async def reorder_personalisations(
-    body: ReorderPersonalisationsRequest,
-    auth: AuthContext = Depends(require_app_context),
-    db: Session = Depends(get_db),
-):
-    """
-    Reorder an experience's personalisations. ``ordered_pids`` is top-first
-    (index 0 = highest priority = served first) and must be an exact permutation
-    of the experience's personalisations. Returns them in the new order.
-    """
-    exp = ExperiencesCRUD(db).get_by_pid(body.experience_id)
-    if not exp:
-        raise HTTPException(status_code=404, detail="Experience not found")
-    if str(exp.organisation_id) != str(auth.organisation_id) or exp.app_id != auth.app_id:
-        raise HTTPException(status_code=403, detail="Not in your app")
-
-    result = PersonalisationsCRUD(db).reorder_personalisations(
-        body.experience_id, body.ordered_pids
-    )
-    if result is None:
-        raise HTTPException(
-            status_code=400,
-            detail="ordered_pids must be exactly this experience's personalisations",
-        )
-
-    # ponytail: no notice-service push here — reorder sets reassign=True, so users
-    # re-resolve on their next fetch. Add a push (verified event type) if/when the
-    # live preview needs instant refresh.
-    return result
 
 
 @router.patch("/{pid}/enable/", response_model=PersonalisationDetailedResponse)
