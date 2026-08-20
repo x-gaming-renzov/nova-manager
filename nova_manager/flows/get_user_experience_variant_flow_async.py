@@ -176,11 +176,16 @@ class GetUserExperienceVariantFlowAsync:
                     )
                     continue
 
-                # Enforce segment membership if any segment rules are configured
+                # Enforce segment membership if any segment rules are configured.
+                # Use evaluation_context (payload + stored profile), matching
+                # rule_config below — segment fields like "state" are typically
+                # set server-side via update-user-profile, not resent in every
+                # request payload, so checking against bare payload made every
+                # segment-targeted personalisation unmatchable.
                 if personalisation.segment_rules:
                     if not any(
                         self.rule_evaluator.evaluate_rule(
-                            seg.rule_config, payload
+                            seg.rule_config, evaluation_context
                         ) for seg in personalisation.segment_rules
                     ):
                         logger.info(

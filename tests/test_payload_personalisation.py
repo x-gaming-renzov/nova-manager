@@ -771,3 +771,38 @@ class TestSegmentRulesAndPayload:
             payload={"region": "NA", "in_tournament": True},
         )
         assert result[experience.name].evaluation_reason != "personalisation_match"
+
+    async def test_segment_field_only_in_profile_still_matches(self):
+        """Segment field set server-side via update-user-profile (e.g. "state"),
+        never resent in the app's request payload — must still be evaluated
+        against it, same as the personalisation's own rule_config. Regression
+        for a bug where segment_rules checked bare payload only, so any
+        segment keyed on a profile-only field could never match and always
+        fell through to a broader/lower-priority personalisation."""
+        user = _make_user(profile={"state": "Badakhshan"})
+
+        ff = _make_feature_flag()
+        ef = _make_experience_feature(ff)
+        fv = _make_feature_variant(ef.pid)
+        ev = _make_experience_variant(feature_variants=[fv])
+        pev = _make_personalisation_experience_variant(ev)
+
+        segment_rule = MagicMock()
+        segment_rule.rule_config = {
+            "conditions": [
+                {"field": "state", "operator": "contains", "value": "Badakhshan"}
+            ]
+        }
+
+        personalisation = _make_personalisation(
+            rule_config={"conditions": []},
+            experience_variants=[pev],
+            segment_rules=[segment_rule],
+        )
+
+        experience = _make_experience(
+            personalisations=[personalisation], features=[ef]
+        )
+
+        result = await _run_flow(user, experience, payload={})
+        assert result[experience.name].evaluation_reason == "personalisation_match"
