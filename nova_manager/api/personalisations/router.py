@@ -2,7 +2,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from nova_manager.database.session import get_db
 from nova_manager.components.auth.dependencies import require_app_context
@@ -62,8 +62,9 @@ async def _notify_notice_service(
 
 # Personalisation endpoints
 @router.post("/create-personalisation/", response_model=PersonalisationDetailedResponse)
-async def create_personalisation(
+def create_personalisation(
     personalisation_data: PersonalisationCreate,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
 ):
@@ -266,8 +267,11 @@ async def create_personalisation(
                 "rule_config": seg.rule_config,
             })
 
-    # Notify notice service
-    await _notify_notice_service(
+    # Notify notice service — backgrounded so a slow/unreachable notice
+    # service never adds to this request's response time (it already
+    # swallows its own errors; it was only ever best-effort).
+    background_tasks.add_task(
+        _notify_notice_service,
         org_id=str(experience.organisation_id),
         app_id=experience.app_id,
         experience_names=[experience.name],
@@ -279,7 +283,7 @@ async def create_personalisation(
 
 
 @router.get("/", response_model=List[PersonalisationListResponse])
-async def list_personalisations(
+def list_personalisations(
     auth: AuthContext = Depends(require_app_context),
     search: Optional[str] = Query(
         None, description="Search personalisations by name or description"
@@ -319,7 +323,7 @@ async def list_personalisations(
     "/personalised-experiences/{experience_id}/",
     response_model=List[PersonalisationDetailedResponse],
 )
-async def list_personalised_experiences(
+def list_personalised_experiences(
     experience_id: UUID,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
@@ -336,7 +340,7 @@ async def list_personalised_experiences(
 # Declared before /{pid}/ — FastAPI matches in declaration order, so the literal
 # route must come first or "reorder" binds to pid and 422s on UUID parsing.
 @router.patch("/reorder/", response_model=List[PersonalisationDetailedResponse])
-async def reorder_personalisations(
+def reorder_personalisations(
     body: ReorderPersonalisationsRequest,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
@@ -368,9 +372,10 @@ async def reorder_personalisations(
 
 
 @router.patch("/{pid}/", response_model=PersonalisationDetailedResponse)
-async def update_personalisation(
+def update_personalisation(
     pid: UUID,
     update_data: PersonalisationUpdate,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
 ):
@@ -434,7 +439,8 @@ async def update_personalisation(
     # Notify notice service
     exp = ExperiencesCRUD(db).get_by_pid(updated.experience_id)
     if exp:
-        await _notify_notice_service(
+        background_tasks.add_task(
+            _notify_notice_service,
             org_id=str(auth.organisation_id),
             app_id=auth.app_id,
             experience_names=[exp.name],
@@ -445,7 +451,7 @@ async def update_personalisation(
 
 
 @router.get("/{pid}/", response_model=PersonalisationDetailedResponse)
-async def get_personalisation(
+def get_personalisation(
     pid: UUID,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
@@ -472,8 +478,9 @@ async def get_personalisation(
 
 
 @router.patch("/{pid}/disable/", response_model=PersonalisationDetailedResponse)
-async def disable_personalisation(
+def disable_personalisation(
     pid: UUID,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
 ):
@@ -502,7 +509,8 @@ async def disable_personalisation(
     # Notify notice service
     exp = ExperiencesCRUD(db).get_by_pid(personalisation.experience_id)
     if exp:
-        await _notify_notice_service(
+        background_tasks.add_task(
+            _notify_notice_service,
             org_id=str(auth.organisation_id),
             app_id=auth.app_id,
             experience_names=[exp.name],
@@ -513,8 +521,9 @@ async def disable_personalisation(
 
 
 @router.patch("/{pid}/enable/", response_model=PersonalisationDetailedResponse)
-async def enable_personalisation(
+def enable_personalisation(
     pid: UUID,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
 ):
@@ -543,7 +552,8 @@ async def enable_personalisation(
     # Notify notice service
     exp = ExperiencesCRUD(db).get_by_pid(personalisation.experience_id)
     if exp:
-        await _notify_notice_service(
+        background_tasks.add_task(
+            _notify_notice_service,
             org_id=str(auth.organisation_id),
             app_id=auth.app_id,
             experience_names=[exp.name],
