@@ -1,7 +1,7 @@
 import traceback
 from typing import List
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 
@@ -24,6 +24,7 @@ from nova_manager.components.auth.dependencies import (
     require_sdk_app_context,
 )
 from nova_manager.core.security import AuthContext, SDKAuthContext
+from nova_manager.core.notice_service import notify_notice_service
 
 
 router = APIRouter()
@@ -309,6 +310,7 @@ async def get_feature_flag(
 @router.patch("/{flag_pid}/toggle/", response_model=FeatureFlagListItem)
 async def toggle_feature_flag(
     flag_pid: UUID,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_app_context),
     db: Session = Depends(get_db),
 ):
@@ -321,4 +323,23 @@ async def toggle_feature_flag(
         raise HTTPException(status_code=403, detail="Not in your organization")
     if flag.app_id != auth.app_id:
         raise HTTPException(status_code=403, detail="Not in your app")
-    return crud.toggle_active(flag_pid)
+    updated = crud.toggle_active(flag_pid)
+
+    # Notify notice service — toggling a flag changes what every experience
+    # that references it serves (a card/section can vanish or reappear), so
+    # every one of those experiences needs a live push, not just the flag's
+    # own name (SDK clients subscribe by experience name, not flag name).
+    experience_names = [
+        ef.experience.name
+        for ef in ExperienceFeaturesCRUD(db).get_by_feature(flag_pid)
+        if ef.experience
+    ]
+    background_tasks.add_task(
+        notify_notice_service,
+        org_id=str(auth.organisation_id),
+        app_id=auth.app_id,
+        experience_names=experience_names,
+        event_type="feature_flag_toggled",
+    )
+
+    return updated

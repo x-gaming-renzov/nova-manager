@@ -179,6 +179,15 @@ class ExperienceFeaturesCRUD(BaseCRUD):
             .first()
         )
 
+    def get_by_feature(self, feature_id: UUIDType) -> List[ExperienceFeatures]:
+        """Every experience this feature flag is attached to."""
+        return (
+            self.db.query(ExperienceFeatures)
+            .options(selectinload(ExperienceFeatures.experience))
+            .filter(ExperienceFeatures.feature_id == feature_id)
+            .all()
+        )
+
 
 class ExperienceVariantsCRUD(BaseCRUD):
     """CRUD operations for Personalisations"""
