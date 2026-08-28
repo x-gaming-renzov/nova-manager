@@ -151,8 +151,28 @@ class GetUserExperienceVariantFlowAsync:
                     last_updated_at = personalisation.last_updated_at
 
                     if assigned_at >= last_updated_at or not personalisation.reassign:
-                        experience_variant_assignment = existing_user_experience
-                        break
+                        # The personalisation record itself is unchanged, but the
+                        # user's profile isn't tracked by last_updated_at — it can
+                        # change between requests (city, org data, etc). Trusting
+                        # the cache blindly here let a user who no longer matches
+                        # the segment/rule keep the old assignment forever. Re-check
+                        # against the CURRENT context before reusing it; if it no
+                        # longer matches, fall through to real evaluation below.
+                        still_matches = personalisation.is_active and (
+                            not personalisation.segment_rules
+                            or any(
+                                self.rule_evaluator.evaluate_rule(
+                                    seg.rule_config, evaluation_context
+                                )
+                                for seg in personalisation.segment_rules
+                            )
+                        ) and self.rule_evaluator.evaluate_rule(
+                            personalisation.rule_config, evaluation_context
+                        )
+
+                        if still_matches:
+                            experience_variant_assignment = existing_user_experience
+                            break
 
                 # If personalisation is not active, skip it
                 if not personalisation.is_active:
