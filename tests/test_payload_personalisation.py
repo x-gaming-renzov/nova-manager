@@ -6,6 +6,7 @@ over payload for overlapping keys, ensuring stored profile data is authoritative
 """
 
 import uuid
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -806,3 +807,140 @@ class TestSegmentRulesAndPayload:
 
         result = await _run_flow(user, experience, payload={})
         assert result[experience.name].evaluation_reason == "personalisation_match"
+@pytest.mark.asyncio
+class TestStalePersonalisationCacheRevalidation:
+    """Regression for the "wrong city segment" bug: a user cached against a
+    segment-targeted personalisation kept getting served that personalisation
+    forever, even after their profile changed and no longer matched the
+    segment rule -- because the cache short-circuit never re-checked the rule."""
+
+    async def test_cached_assignment_no_longer_matching_segment_is_dropped(self):
+        ff = _make_feature_flag()
+        ef = _make_experience_feature(ff)
+        fv = _make_feature_variant(ef.pid)
+        ev = _make_experience_variant(feature_variants=[fv])
+        pev = _make_personalisation_experience_variant(ev)
+
+        segment_rule = MagicMock()
+        segment_rule.rule_config = {
+            "conditions": [
+                {"field": "city", "operator": "equals", "value": "Bomdila"}
+            ]
+        }
+
+        personalisation = _make_personalisation(
+            rule_config={"conditions": []},
+            experience_variants=[pev],
+            segment_rules=[segment_rule],
+            reassign=False,
+        )
+        personalisation.last_updated_at = datetime(2026, 1, 1)
+
+        experience = _make_experience(
+            personalisations=[personalisation], features=[ef]
+        )
+
+        # User's profile no longer has city=Bomdila (e.g. org city corrected
+        # to their real city, "Adoni") -- but a prior cached assignment to
+        # this same personalisation still exists, assigned after the
+        # personalisation was last edited.
+        user = _make_user(profile={"city": "Adoni"})
+
+        cached = MagicMock()
+        cached.experience_id = experience.pid
+        cached.personalisation_id = personalisation.pid
+        cached.personalisation_name = personalisation.name
+        cached.experience_variant_id = ev.pid
+        cached.features = {}
+        cached.evaluation_reason = "personalisation_match"
+        cached.assigned_at = datetime(2026, 6, 1)
+
+        db = AsyncMock()
+        flow = GetUserExperienceVariantFlowAsync(db)
+        flow.users_crud.get_by_user_id = AsyncMock(return_value=user)
+        flow.experiences_crud.get_experiences_by_names = AsyncMock(
+            return_value=[experience]
+        )
+        flow.user_experience_personalisation_crud.get_user_experiences_personalisations = (
+            AsyncMock(return_value=[cached])
+        )
+        flow.user_experience_personalisation_crud.bulk_create_user_experience_personalisations = (
+            AsyncMock()
+        )
+
+        result = await flow.get_user_experience_variants(
+            user_id=user.user_id,
+            organisation_id="org-1",
+            app_id="app-1",
+            payload={},
+            experience_names=[experience.name],
+        )
+
+        assignment = result[experience.name]
+        assert assignment.personalisation_id is None
+        assert assignment.evaluation_reason == "no_experience_assignment_error"
+
+    async def test_cached_assignment_still_matching_segment_is_reused(self):
+        """Sanity check: the fix must not break the legitimate fast path --
+        a user whose profile still satisfies the segment/rule keeps the
+        cached assignment."""
+        ff = _make_feature_flag()
+        ef = _make_experience_feature(ff)
+        fv = _make_feature_variant(ef.pid)
+        ev = _make_experience_variant(feature_variants=[fv])
+        pev = _make_personalisation_experience_variant(ev)
+
+        segment_rule = MagicMock()
+        segment_rule.rule_config = {
+            "conditions": [
+                {"field": "city", "operator": "equals", "value": "Bomdila"}
+            ]
+        }
+
+        personalisation = _make_personalisation(
+            rule_config={"conditions": []},
+            experience_variants=[pev],
+            segment_rules=[segment_rule],
+            reassign=False,
+        )
+        personalisation.last_updated_at = datetime(2026, 1, 1)
+
+        experience = _make_experience(
+            personalisations=[personalisation], features=[ef]
+        )
+
+        user = _make_user(profile={"city": "Bomdila"})
+
+        cached = MagicMock()
+        cached.experience_id = experience.pid
+        cached.personalisation_id = personalisation.pid
+        cached.personalisation_name = personalisation.name
+        cached.experience_variant_id = ev.pid
+        cached.features = {}
+        cached.evaluation_reason = "personalisation_match"
+        cached.assigned_at = datetime(2026, 6, 1)
+
+        db = AsyncMock()
+        flow = GetUserExperienceVariantFlowAsync(db)
+        flow.users_crud.get_by_user_id = AsyncMock(return_value=user)
+        flow.experiences_crud.get_experiences_by_names = AsyncMock(
+            return_value=[experience]
+        )
+        flow.user_experience_personalisation_crud.get_user_experiences_personalisations = (
+            AsyncMock(return_value=[cached])
+        )
+        flow.user_experience_personalisation_crud.bulk_create_user_experience_personalisations = (
+            AsyncMock()
+        )
+
+        result = await flow.get_user_experience_variants(
+            user_id=user.user_id,
+            organisation_id="org-1",
+            app_id="app-1",
+            payload={},
+            experience_names=[experience.name],
+        )
+
+        assignment = result[experience.name]
+        assert assignment.personalisation_id == personalisation.pid
+        assert assignment.evaluation_reason.startswith("assigned_from_cache")
