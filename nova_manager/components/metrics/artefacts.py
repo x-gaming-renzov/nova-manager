@@ -1,5 +1,7 @@
 import re
 
+from nova_manager.core.config import NOVA_ENV
+
 
 class EventsArtefacts:
     def __init__(self, organisation_id: str, app_id: str):
@@ -8,10 +10,16 @@ class EventsArtefacts:
         self.database_name = self._database_name()
 
     def _database_name(self) -> str:
-        # Build a ClickHouse-safe database name
+        # Build a ClickHouse-safe database name. Same org+app ids can be
+        # shared across environments (so the same SDK key resolves in both) —
+        # NOVA_ENV keeps their event data in separate databases. Production
+        # keeps the un-suffixed name so it doesn't move an already-live database.
         safe_org = self._sanitized_string(self.organisation_id)
         safe_app = self._sanitized_string(self.app_id)
-        return f"org_{safe_org}_app_{safe_app}"
+        base = f"org_{safe_org}_app_{safe_app}"
+        if NOVA_ENV == "production":
+            return base
+        return f"{base}_{self._sanitized_string(NOVA_ENV)}"
 
     def _sanitized_string(self, s: str):
         return re.sub(r"[^a-zA-Z0-9_]", "_", s)

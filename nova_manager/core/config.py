@@ -13,6 +13,9 @@ CLICKHOUSE_HOST = getenv("CLICKHOUSE_HOST") or "localhost"
 CLICKHOUSE_PORT = int(getenv("CLICKHOUSE_PORT") or "8123")
 CLICKHOUSE_USER = getenv("CLICKHOUSE_USER") or "default"
 CLICKHOUSE_PASSWORD = getenv("CLICKHOUSE_PASSWORD") or ""
+# Distinguishes environments that otherwise share the same org/app ids (and
+# therefore the same SDK key) so their ClickHouse analytics don't collide.
+NOVA_ENV = getenv("NOVA_ENV") or "production"
 BREVO_API_KEY = getenv("BREVO_API_KEY") or ""
 SDK_BACKEND_URL = getenv("SDK_BACKEND_URL") or ""
 ALLOWED_ORIGINS = [o.strip() for o in (getenv("ALLOWED_ORIGINS") or "*").split(",")]
