@@ -10,7 +10,6 @@
 #   ./deploy_to_gcp.sh production  # deploys production environment
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
-export MSYS_NO_PATHCONV=1
 
 ### ── ENVIRONMENT ARGUMENT ───────────────────────────────────
 DEPLOY_ENV="${1:-}"
@@ -107,6 +106,7 @@ echo "=== Bootstrapping ClickHouse ($CH_BOOTSTRAP_JOB) ==="
 if gcloud run jobs describe "$CH_BOOTSTRAP_JOB" --region="$REGION" --project="$PROJECT_ID" 2>/dev/null; then
   gcloud run jobs update "$CH_BOOTSTRAP_JOB" \
     --image="$FULL_IMAGE" \
+    --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=//app,NOVA_ENV=${NOVA_ENV}" \
     --region="$REGION" \
     --project="$PROJECT_ID"
   gcloud run jobs execute "$CH_BOOTSTRAP_JOB" \
@@ -121,7 +121,7 @@ else
     --set-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
     --vpc-connector="$VPC_CONNECTOR" \
     --set-secrets="DATABASE_URL=${DB_URL_SECRET}:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest" \
-    --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=/app,NOVA_ENV=${NOVA_ENV}" \
+    --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=//app,NOVA_ENV=${NOVA_ENV}" \
     --service-account="$SA_EMAIL" \
     --region="$REGION" \
     --project="$PROJECT_ID" \
@@ -162,7 +162,7 @@ gcloud run deploy "$WORKER_NAME" \
   --vpc-connector="$VPC_CONNECTOR" \
   --service-account="$SA_EMAIL" \
   --set-secrets="DATABASE_URL=${DB_URL_SECRET}:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest,NOTICE_SERVICE_SECRET=NOTICE_SERVICE_SECRET:latest,NOTICE_SERVICE_URL=NOTICE_SERVICE_URL:latest,NOVA_ADMIN_KEY=NOVA_ADMIN_KEY:latest" \
-  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=/app,NOVA_ENV=${NOVA_ENV}" \
+  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=//app,NOVA_ENV=${NOVA_ENV}" \
   --cpu=1 \
   --memory=512Mi \
   --no-cpu-throttling \
