@@ -5,8 +5,11 @@ Usage:
   poetry run python scripts/bootstrap_clickhouse.py
 """
 
+import os
 import sys
 import logging
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from nova_manager.database.session import SessionLocal
 from nova_manager.components.auth.models import App as AuthApp

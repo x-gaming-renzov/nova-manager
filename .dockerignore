@@ -64,3 +64,5 @@ test_*
 nova_manager_backup*.sql
 *.exe
 scripts/cleanup_app_experiences.py
+backups/
+*.parquet

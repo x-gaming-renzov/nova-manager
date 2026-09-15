@@ -10,6 +10,7 @@
 #   ./deploy_to_gcp.sh production  # deploys production environment
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
+export MSYS_NO_PATHCONV=1
 
 ### ── ENVIRONMENT ARGUMENT ───────────────────────────────────
 DEPLOY_ENV="${1:-}"
