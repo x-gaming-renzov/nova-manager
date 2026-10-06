@@ -1,9 +1,15 @@
 import inspect
+import uuid
 import pytest
+from collections import Counter
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from nova_manager.components.rule_evaluator.controller import RuleEvaluator
+from nova_manager.flows.get_user_experience_variant_flow_async import (
+    GetUserExperienceVariantFlowAsync,
+)
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -202,3 +208,116 @@ class TestNoDebugPrint:
         # There should be no print() calls in this module
         assert "print(" not in source, \
             "request_response.py contains a print() statement that leaks invite tokens"
+
+
+# ────────────────────────────────────────────────────────────────────
+# Bug 7: Variant split did not follow the configured percentages
+# ────────────────────────────────────────────────────────────────────
+
+
+class TestVariantSplitFollowsConfiguredPercentages:
+    """Each variant used to get its own independent hash, and a user no variant
+    claimed fell back to the first one. That is not a partition: a 50/50 test
+    served 75/25 and a 90/10 test served 99/1.
+    """
+
+    EXPERIENCE_ID = uuid.UUID(int=1)
+    PERSONALISATION_ID = uuid.UUID(int=2)
+    # Fixed ids, so the sample — and therefore the result — is the same every run.
+    USERS = [SimpleNamespace(pid=uuid.UUID(int=n)) for n in range(1000, 21000)]
+    TOLERANCE = 2.0  # percentage points
+
+    @staticmethod
+    def _variants(*percentages):
+        """Link rows in creation order: ids 1, 2, 3… named A, B, C…"""
+        return [
+            SimpleNamespace(
+                id=position,
+                target_percentage=percentage,
+                experience_variant_id=uuid.UUID(int=100 + position),
+                experience_variant=chr(64 + position),
+            )
+            for position, percentage in enumerate(percentages, start=1)
+        ]
+
+    FLOW = GetUserExperienceVariantFlowAsync(AsyncMock())
+
+    def _pick(self, user, variants):
+        return self.FLOW._select_experience_variant_by_target_percentage(
+            user=user,
+            experience_id=self.EXPERIENCE_ID,
+            personalisation_id=self.PERSONALISATION_ID,
+            experience_variants=variants,
+        )
+
+    def _served(self, variants, users=None):
+        users = self.USERS if users is None else users
+        counts = Counter(self._pick(user, variants) for user in users)
+        return {
+            link.experience_variant: 100 * counts[link.experience_variant] / len(users)
+            for link in variants
+        }
+
+    @pytest.mark.parametrize(
+        "percentages",
+        [(50, 50), (90, 10), (10, 90), (34, 33, 33), (25, 25, 25, 25)],
+    )
+    def test_each_variant_is_served_its_configured_share(self, percentages):
+        variants = self._variants(*percentages)
+
+        served = self._served(variants)
+
+        for link in variants:
+            assert served[link.experience_variant] == pytest.approx(
+                link.target_percentage, abs=self.TOLERANCE
+            )
+
+    def test_a_user_gets_the_same_variant_whatever_order_the_rows_load_in(self):
+        # The relationship has no ORDER BY, so the list order is whatever the
+        # database returns. The pick must not depend on it.
+        variants = self._variants(34, 33, 33)
+        users = self.USERS[:2000]
+
+        in_order = [self._pick(user, variants) for user in users]
+        reversed_order = [self._pick(user, variants[::-1]) for user in users]
+
+        assert in_order == reversed_order
+
+    def test_the_split_holds_among_users_let_in_by_a_partial_rollout(self):
+        # Reusing the rollout gate's hash for the variant pick would send every
+        # user of a 20% rollout to the first variant: they all hash below 0.2.
+        rollout_context = f"{self.EXPERIENCE_ID}:{self.PERSONALISATION_ID}"
+        let_in = [
+            user
+            for user in self.USERS
+            if RuleEvaluator().evaluate_target_percentage(str(user.pid), 20, rollout_context)
+        ]
+        variants = self._variants(50, 50)
+
+        served = self._served(variants, users=let_in)
+
+        assert served["A"] == pytest.approx(50, abs=3.0)
+
+    def test_percentages_short_of_100_leave_the_remainder_with_the_first_variant(self):
+        # Update does not re-check that percentages sum to 100, so this state is
+        # reachable. 30 + 30 leaves 40 unclaimed; it goes to the first variant.
+        variants = self._variants(30, 30)
+
+        served = self._served(variants)
+
+        assert served["A"] == pytest.approx(70, abs=self.TOLERANCE)
+
+    def test_a_zero_percent_variant_is_served_to_nobody(self):
+        variants = self._variants(0, 100)
+
+        served = self._served(variants, users=self.USERS[:2000])
+
+        assert served["A"] == 0
+
+    def test_a_single_variant_is_served_to_everyone(self):
+        # Every CMS deployment today is one variant at 100%.
+        variants = self._variants(100)
+
+        served = self._served(variants, users=self.USERS[:2000])
+
+        assert served["A"] == 100

@@ -381,24 +381,33 @@ class GetUserExperienceVariantFlowAsync:
         if not experience_variants:
             return None
 
-        # Find the first experience variant that matches target percentage
-        for experience_variant in experience_variants:
+        # The relationship has no ORDER BY; sort so a user's variant does not
+        # depend on the order the rows happened to load in.
+        ordered_variants = sorted(experience_variants, key=lambda variant: variant.id)
+
+        # One hash per user and personalisation, checked against the running
+        # total, so the variants partition the users. A separate hash per variant
+        # let the shares overlap: 50/50 served 75/25. The ":variant" suffix keeps
+        # this hash independent of the rollout gate's, which would otherwise send
+        # everyone a partial rollout lets in to the first variant.
+        context_id = f"{experience_id}:{personalisation_id}:variant"
+        cumulative_percentage = 0
+
+        for experience_variant in ordered_variants:
             target_percentage = experience_variant.target_percentage
 
             # Validate target percentage
             if target_percentage < 0 or target_percentage > 100:
                 continue  # Skip invalid percentages
 
-            # Create context ID for consistent hashing
-            context_id = f"{experience_id}:{personalisation_id}:{experience_variant.experience_variant_id}"
+            cumulative_percentage += target_percentage
 
-            # Check if user falls within this variant's target percentage
             if self.rule_evaluator.evaluate_target_percentage(
-                str(user.pid), target_percentage, context_id
+                str(user.pid), cumulative_percentage, context_id
             ):
                 return experience_variant.experience_variant
 
-        return experience_variants[0].experience_variant
+        return ordered_variants[0].experience_variant
 
     async def _load_experience_personalisation_cache(
         self,
