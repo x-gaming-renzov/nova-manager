@@ -32,6 +32,7 @@ from nova_manager.api.recommendations.router import router as recommendations_ro
 from nova_manager.api.invitations.router import router as invitations_router
 from nova_manager.api.simulations.router import router as simulations_router
 from nova_manager.api.admin.router import router as admin_router
+from nova_manager.api.sync.router import router as sync_router
 
 
 configure_logging()
@@ -73,6 +74,7 @@ app.include_router(recommendations_router, prefix="/api/v1/recommendations")
 app.include_router(invitations_router, prefix="/api/v1/invitations")
 app.include_router(simulations_router, prefix="/api/v1/simulations")
 app.include_router(admin_router, prefix="/api/v1/admin")
+app.include_router(sync_router, prefix="/api/v1/sync")
 
 
 @app.get("/health")

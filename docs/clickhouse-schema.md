@@ -22,6 +22,10 @@ Databases are created on-demand when an app first tracks events, or in bulk via 
 
 Four tables use the **MergeTree** engine and one uses **ReplacingMergeTree**, all with monthly partitioning for efficient time-range pruning.
 
+Every table below also has two columns that ClickHouse fills at insert and that `SELECT *` does
+not return: `_written_at DateTime64(6)` (when the row was written) and `_row_id UUID`, plus a
+`minmax` index on `_written_at`. They order the rows for the sync export; see `docs/sync.md`.
+
 ### 1. `raw_events` — Event log
 
 Stores one row per tracked event. All event types go into this single unified table (filtered by `event_name`).

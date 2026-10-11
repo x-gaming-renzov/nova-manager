@@ -32,6 +32,7 @@ Welcome to the Nova Manager API documentation. This manual provides an exhaustiv
 - Users: `docs/users.md`
 - Invitations: `docs/invitations.md`
 - Recommendations: `docs/recommendations.md`
+- Sync Export (mirror the analytics tables): `docs/sync.md`
 
 ### Conventions
 

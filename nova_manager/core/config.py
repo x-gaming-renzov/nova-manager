@@ -16,6 +16,25 @@ CLICKHOUSE_PASSWORD = getenv("CLICKHOUSE_PASSWORD") or ""
 # Distinguishes environments that otherwise share the same org/app ids (and
 # therefore the same SDK key) so their ClickHouse analytics don't collide.
 NOVA_ENV = getenv("NOVA_ENV") or "production"
+
+
+def rq_queue_name(nova_env: str) -> str:
+    """Job queue for an environment.
+
+    Environments share one Redis, so on a shared queue either worker could take the other's
+    jobs. Production keeps "default" so jobs already queued when this ships are still consumed.
+    """
+    if nova_env == "production":
+        return "default"
+    return f"default-{nova_env}"
+
+
+RQ_QUEUE_NAME = rq_queue_name(NOVA_ENV)
+
+# Sync export (/api/v1/sync): largest page a caller may ask for, and how many seconds of the
+# newest writes are withheld so an insert still in flight cannot land behind a caller's cursor.
+SYNC_EXPORT_MAX_LIMIT = int(getenv("SYNC_EXPORT_MAX_LIMIT") or "10000")
+SYNC_WATERMARK_LAG_SECONDS = int(getenv("SYNC_WATERMARK_LAG_SECONDS") or "30")
 BREVO_API_KEY = getenv("BREVO_API_KEY") or ""
 SDK_BACKEND_URL = getenv("SDK_BACKEND_URL") or ""
 ALLOWED_ORIGINS = [o.strip() for o in (getenv("ALLOWED_ORIGINS") or "*").split(",")]

@@ -55,10 +55,13 @@ class ClickHouseService:
 
         return []  # Empty list = success (matches BigQuery interface)
 
-    def run_query(self, query: str) -> list[dict]:
-        """Execute a query and return results as list[dict]."""
+    def run_query(self, query: str, parameters: dict | None = None) -> list[dict]:
+        """Execute a query and return results as list[dict].
+
+        parameters: values for server-side placeholders written as {name:Type} in the query.
+        """
         try:
-            result = self.client.query(query)
+            result = self.client.query(query, parameters=parameters)
 
             if not result.result_rows:
                 return []

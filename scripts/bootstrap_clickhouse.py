@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from nova_manager.database.session import SessionLocal
 from nova_manager.components.auth.models import App as AuthApp
 from nova_manager.components.metrics.events_controller import EventsController
+from nova_manager.components.sync.markers import ensure_sync_markers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +45,10 @@ def main():
             controller.create_event_props_table()
             controller.create_user_profile_table()
             controller.create_user_experience_table()
+
+            # Tables created before the sync marker columns existed do not get them from
+            # CREATE TABLE IF NOT EXISTS.
+            ensure_sync_markers(controller.database_name)
 
             logger.info(f"Done: org={str_org}, app={str_app}")
 

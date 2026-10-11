@@ -6,6 +6,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from nova_manager.database.session import db_session
 from nova_manager.core.log import logger
+from nova_manager.components.sync.markers import SYNC_MARKER_DDL
 from nova_manager.service.clickhouse_service import ClickHouseService
 
 from nova_manager.components.metrics.artefacts import EventsArtefacts
@@ -33,7 +34,8 @@ class EventsController(EventsArtefacts):
             event_name String,
             event_data String,
             client_ts DateTime64(3),
-            server_ts DateTime64(3)
+            server_ts DateTime64(3),
+            {SYNC_MARKER_DDL}
         ) ENGINE = MergeTree()
         PARTITION BY toYYYYMM(client_ts)
         ORDER BY (event_name, user_id, client_ts)
@@ -50,7 +52,8 @@ class EventsController(EventsArtefacts):
             key String,
             value String,
             client_ts DateTime64(3),
-            server_ts DateTime64(3)
+            server_ts DateTime64(3),
+            {SYNC_MARKER_DDL}
         ) ENGINE = MergeTree()
         PARTITION BY toYYYYMM(client_ts)
         ORDER BY (event_name, user_id, key, client_ts)
@@ -64,7 +67,8 @@ class EventsController(EventsArtefacts):
             user_id String,
             key String,
             value String,
-            server_ts DateTime64(3)
+            server_ts DateTime64(3),
+            {SYNC_MARKER_DDL}
         ) ENGINE = MergeTree()
         PARTITION BY toYYYYMM(server_ts)
         ORDER BY (user_id, key, server_ts)
@@ -90,7 +94,8 @@ class EventsController(EventsArtefacts):
             experience_variant_id String,
             features String,
             evaluation_reason String,
-            assigned_at DateTime64(3)
+            assigned_at DateTime64(3),
+            {SYNC_MARKER_DDL}
         ) ENGINE = MergeTree()
         PARTITION BY toYYYYMM(assigned_at)
         ORDER BY (user_id, experience_id, assigned_at)
@@ -316,7 +321,8 @@ class EventsController(EventsArtefacts):
             currency String DEFAULT '',
             scenario_id String DEFAULT 'actuals',
             period_start DateTime64(3),
-            created_at DateTime64(3)
+            created_at DateTime64(3),
+            {SYNC_MARKER_DDL}
         ) ENGINE = ReplacingMergeTree(created_at)
         PARTITION BY toYYYYMM(period_start)
         ORDER BY (metric_name, dimension, period_start, scenario_id)

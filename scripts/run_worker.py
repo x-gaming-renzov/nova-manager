@@ -18,7 +18,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from nova_manager.core.config import REDIS_URL
+from nova_manager.core.config import REDIS_URL, RQ_QUEUE_NAME
 from nova_manager.core.log import logger, configure_logging
 
 
@@ -59,7 +59,9 @@ def main():
         help="Run in burst mode (quit after processing all jobs)",
     )
     parser.add_argument(
-        "--queue", default="default", help='Queue name to process (default: "default")'
+        "--queue",
+        default=RQ_QUEUE_NAME,
+        help="Queue name to process (default: this environment's queue)",
     )
     args = parser.parse_args()
 

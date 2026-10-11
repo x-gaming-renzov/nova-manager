@@ -66,3 +66,5 @@ nova_manager_backup*.sql
 scripts/cleanup_app_experiences.py
 backups/
 *.parquet
+.env.*
+docker-compose.*.yml

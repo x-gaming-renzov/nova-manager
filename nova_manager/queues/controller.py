@@ -5,7 +5,7 @@ from rq import Queue
 from rq.job import Job
 
 
-from nova_manager.core.config import REDIS_URL
+from nova_manager.core.config import REDIS_URL, RQ_QUEUE_NAME
 
 
 class QueueController:
@@ -21,7 +21,7 @@ class QueueController:
         # Only initialize once
         if not self._initialized:
             self.redis_conn = redis.from_url(REDIS_URL)
-            self.default_queue = Queue(connection=self.redis_conn)
+            self.default_queue = Queue(RQ_QUEUE_NAME, connection=self.redis_conn)
             self._initialized = True
 
     def add_task(self, func: Callable, *args, **kwargs) -> str:
