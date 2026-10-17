@@ -60,6 +60,12 @@ def build_worker(queue: Queue, conn) -> SimpleWorker:
     return SimpleWorker([queue], connection=conn)
 
 
+def preload_job_code():
+    """Import the job code before forking: each process then starts warm (a fresh process
+    spent ~8 s importing on its first job) and shares those pages with the others."""
+    import nova_manager.components.metrics.events_controller  # noqa: F401
+
+
 def build_pool(queue_name: str, conn, processes: int) -> WorkerPool:
     """Several in-process workers, one per forked child; the pool restarts any that die
     and, on SIGTERM, lets each finish its current job before exiting."""
@@ -96,6 +102,7 @@ def main():
         conn = from_url(REDIS_URL)
         logger.info(f"Connected to Redis at {REDIS_URL}")
 
+        preload_job_code()
         if WORKER_PROCESSES > 1:
             logger.info(f"Starting {WORKER_PROCESSES} worker processes on {args.queue}...")
             build_pool(args.queue, conn, WORKER_PROCESSES).start(burst=args.burst)

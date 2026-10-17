@@ -62,10 +62,12 @@ def test_the_pool_is_used_only_when_more_than_one_process_is_configured(monkeypa
     monkeypatch.setattr(run_worker, "build_worker", lambda *a: FakeWorker())
     monkeypatch.setattr(run_worker, "start_health_server", lambda port: None)
     monkeypatch.setattr(run_worker, "configure_logging", lambda: None)
+    monkeypatch.setattr(run_worker, "preload_job_code", lambda: started.append("preload"))
     monkeypatch.setattr(sys, "argv", ["run_worker.py"])
     with pytest.raises(SystemExit) as exit_:
         run_worker.main()
-    assert started == (["pool"] if uses_pool else ["worker"])
+    # Job code is imported before any process forks, so none of them starts cold.
+    assert started == (["preload", "pool"] if uses_pool else ["preload", "worker"])
     assert exit_.value.code == 0
 
 

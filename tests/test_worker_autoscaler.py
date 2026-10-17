@@ -162,3 +162,28 @@ def test_a_jobs_logged_description_names_the_function_without_its_arguments(monk
     controller.QueueController().add_task(Controller().track_events, "u1", [{"event_data": {"phone": "+91999"}}])
     assert seen["description"].endswith("Controller.track_events")
     assert "+91999" not in seen["description"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="rq cannot be imported without fork()")
+def test_a_delayed_job_keeps_the_retries_and_the_argument_free_description(monkeypatch):
+    from datetime import timedelta
+
+    from nova_manager.queues import controller
+
+    seen = {}
+
+    class FakeQueue:
+        def __init__(self, *a, **k):
+            pass
+
+        def enqueue_in(self, delay, func, *args, **kwargs):
+            seen.update(kwargs, delay=delay, args=args)
+            return type("J", (), {"id": "j"})()
+
+    monkeypatch.setattr(controller.redis, "from_url", lambda url: object())
+    monkeypatch.setattr(controller, "Queue", FakeQueue)
+    monkeypatch.setattr(controller.QueueController, "_instance", None)
+    monkeypatch.setattr(controller.QueueController, "_initialized", False)
+    controller.QueueController().add_delayed_task(timedelta(seconds=60), print, "anon", "identified")
+    assert seen["delay"] == timedelta(seconds=60) and seen["args"] == ("anon", "identified")
+    assert seen["retry"].max == 3 and seen["description"] == "print"
