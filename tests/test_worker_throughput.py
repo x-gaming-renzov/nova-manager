@@ -306,3 +306,11 @@ def test_another_app_does_not_reuse_this_apps_cached_schema(schema_store):
     _track(app="app-b", level=1)
     assert schema_store.reads == 2 and schema_store.creates == 2
 
+
+def test_the_job_log_names_events_without_their_personal_data(schema_store, monkeypatch):
+    from nova_manager.components.metrics import events_controller as ec
+
+    logged = []
+    monkeypatch.setattr(ec.logger, "info", lambda msg, *a, **k: logged.append(msg))
+    _track(phone="+919999999999")
+    assert "level_up" in logged[0] and "+919999999999" not in logged[0]

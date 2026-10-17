@@ -148,8 +148,10 @@ class EventsController(EventsArtefacts):
             _known_schema_keys[(self.organisation_id, self.app_id, event_name)] = (keys, now)
 
     def track_events(self, user_id: str, events: list[TrackEvent]):
+        # Names only: event_data carries personal data (phone numbers, dates of birth).
         logger.info(
-            f"EventsController.track_events: user_id={user_id}, org={self.organisation_id}, app={self.app_id}, events={events}"
+            f"EventsController.track_events: user_id={user_id}, org={self.organisation_id}, app={self.app_id}, "
+            f"events={[event['event_name'] for event in events]}"
         )
         time_now = datetime.now(timezone.utc)
 
