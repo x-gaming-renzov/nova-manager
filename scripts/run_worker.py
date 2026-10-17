@@ -9,6 +9,7 @@ import os
 import signal
 import argparse
 from rq import SimpleWorker, Queue
+from rq.worker_pool import WorkerPool
 from redis import from_url
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -17,7 +18,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from nova_manager.core.config import REDIS_URL, RQ_QUEUE_NAME
+from nova_manager.core.config import REDIS_URL, RQ_QUEUE_NAME, WORKER_PROCESSES
 from nova_manager.core.log import logger, configure_logging
 
 
@@ -59,6 +60,12 @@ def build_worker(queue: Queue, conn) -> SimpleWorker:
     return SimpleWorker([queue], connection=conn)
 
 
+def build_pool(queue_name: str, conn, processes: int) -> WorkerPool:
+    """Several in-process workers, one per forked child; the pool restarts any that die
+    and, on SIGTERM, lets each finish its current job before exiting."""
+    return WorkerPool([queue_name], connection=conn, num_workers=processes, worker_class=SimpleWorker)
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Run RQ worker for Nova Manager")
@@ -88,6 +95,11 @@ def main():
         # Connect to Redis
         conn = from_url(REDIS_URL)
         logger.info(f"Connected to Redis at {REDIS_URL}")
+
+        if WORKER_PROCESSES > 1:
+            logger.info(f"Starting {WORKER_PROCESSES} worker processes on {args.queue}...")
+            build_pool(args.queue, conn, WORKER_PROCESSES).start(burst=args.burst)
+            sys.exit(0)
 
         queue = Queue(args.queue, connection=conn)
         worker = build_worker(queue, conn)

@@ -150,7 +150,12 @@ gcloud run deploy "$IMAGE_NAME" \
   --project="$PROJECT_ID"
 
 # 6. Deploy Worker. Production scales 1-6 on its queue (step 6b); staging stays small.
-if [[ "$DEPLOY_ENV" == "production" ]]; then WORKER_MAX_INSTANCES=6; else WORKER_MAX_INSTANCES=3; fi
+# Production runs 3 jobs at a time per instance (each process ~160 MB, ~28% CPU), hence 1 GiB.
+if [[ "$DEPLOY_ENV" == "production" ]]; then
+  WORKER_MAX_INSTANCES=6; WORKER_PROCESSES=3; WORKER_MEMORY=1Gi
+else
+  WORKER_MAX_INSTANCES=3; WORKER_PROCESSES=1; WORKER_MEMORY=512Mi
+fi
 echo "=== Deploying Worker ($WORKER_NAME) ==="
 gcloud run deploy "$WORKER_NAME" \
   --image="$FULL_IMAGE" \
@@ -163,9 +168,9 @@ gcloud run deploy "$WORKER_NAME" \
   --vpc-connector="$VPC_CONNECTOR" \
   --service-account="$SA_EMAIL" \
   --set-secrets="DATABASE_URL=${DB_URL_SECRET}:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest,NOTICE_SERVICE_SECRET=NOTICE_SERVICE_SECRET:latest,NOTICE_SERVICE_URL=NOTICE_SERVICE_URL:latest,NOVA_ADMIN_KEY=NOVA_ADMIN_KEY:latest" \
-  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=//app,NOVA_ENV=${NOVA_ENV}" \
+  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,PYTHONPATH=//app,NOVA_ENV=${NOVA_ENV},WORKER_PROCESSES=${WORKER_PROCESSES}" \
   --cpu=1 \
-  --memory=512Mi \
+  --memory="$WORKER_MEMORY" \
   --no-cpu-throttling \
   --concurrency=1 \
   --min-instances=1 \

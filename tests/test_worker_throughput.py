@@ -32,6 +32,43 @@ def test_worker_runs_jobs_in_process_instead_of_forking_one_per_job():
     assert isinstance(worker, SimpleWorker)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="rq cannot be imported without fork()")
+def test_a_pool_runs_several_in_process_workers_at_once():
+    from redis import Redis
+    from rq import SimpleWorker
+
+    pool = _load_run_worker().build_pool("default", Redis(), 3)
+    assert (pool.num_workers, pool.worker_class) == (3, SimpleWorker)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="rq cannot be imported without fork()")
+@pytest.mark.parametrize("processes, uses_pool", [(1, False), (3, True)])
+def test_the_pool_is_used_only_when_more_than_one_process_is_configured(monkeypatch, processes, uses_pool):
+    run_worker = _load_run_worker()
+    started = []
+
+    class FakePool:
+        def start(self, burst):
+            started.append("pool")
+
+    class FakeWorker:
+        _stop_requested = True
+
+        def work(self, burst, with_scheduler):
+            started.append("worker")
+
+    monkeypatch.setattr(run_worker, "WORKER_PROCESSES", processes)
+    monkeypatch.setattr(run_worker, "build_pool", lambda *a: FakePool())
+    monkeypatch.setattr(run_worker, "build_worker", lambda *a: FakeWorker())
+    monkeypatch.setattr(run_worker, "start_health_server", lambda port: None)
+    monkeypatch.setattr(run_worker, "configure_logging", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["run_worker.py"])
+    with pytest.raises(SystemExit) as exit_:
+        run_worker.main()
+    assert started == (["pool"] if uses_pool else ["worker"])
+    assert exit_.value.code == 0
+
+
 @pytest.fixture
 def fresh_clients(monkeypatch):
     created = []

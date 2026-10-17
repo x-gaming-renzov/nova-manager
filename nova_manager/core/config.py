@@ -30,6 +30,8 @@ def rq_queue_name(nova_env: str) -> str:
 
 
 RQ_QUEUE_NAME = rq_queue_name(NOVA_ENV)
+# Jobs mostly wait on ClickHouse and Postgres, so one instance can run several at once.
+WORKER_PROCESSES = int(getenv("WORKER_PROCESSES") or "1")
 
 # Sync export (/api/v1/sync): largest page a caller may ask for, and how many seconds of the
 # newest writes are withheld so an insert still in flight cannot land behind a caller's cursor.
