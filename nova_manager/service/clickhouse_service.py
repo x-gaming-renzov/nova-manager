@@ -25,6 +25,13 @@ def _get_client() -> Client:
 
 _local = threading.local()
 
+# Each insert used to DESCRIBE its table first; schemas only change on deploy.
+_column_types: dict[tuple[str, tuple[str, ...]], list] = {}
+
+# Workers insert a handful of rows per job, and every insert became a part to merge.
+# The server buffers them into larger parts; waiting keeps a failed insert raising here.
+ASYNC_INSERT_SETTINGS = {"async_insert": 1, "wait_for_async_insert": 1}
+
 
 def _shared_client() -> Client:
     """One client per thread, rebuilt after a fork.
@@ -59,14 +66,22 @@ class ClickHouseService:
 
         columns = list(rows[0].keys())
         data = [[row[col] for col in columns] for row in rows]
+        types_key = (table_name, tuple(columns))
 
         try:
+            if types_key not in _column_types:
+                context = self.client.create_insert_context(table=table_name, column_names=columns)
+                _column_types[types_key] = context.column_types
             self.client.insert(
                 table=table_name,
                 data=data,
                 column_names=columns,
+                column_types=_column_types[types_key],
+                settings=ASYNC_INSERT_SETTINGS,
             )
         except Exception as e:
+            # A changed schema shows up as a failed insert; look the types up again next time.
+            _column_types.pop(types_key, None)
             logger.error(f"ClickHouse insert failed for {table_name}: {str(e)}")
             raise e
 

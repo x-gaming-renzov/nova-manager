@@ -68,3 +68,57 @@ def test_a_forked_process_builds_a_new_client_rather_than_reusing_the_parents_so
     parent_client = clickhouse_service.ClickHouseService().client
     monkeypatch.setattr(clickhouse_service.os, "getpid", lambda: -1)
     assert clickhouse_service.ClickHouseService().client is not parent_client
+
+
+class _RecordingClient:
+    def __init__(self, fail_inserts=0):
+        self.type_lookups = 0
+        self.inserts = []
+        self.fail_inserts = fail_inserts
+
+    def create_insert_context(self, table, column_names):
+        self.type_lookups += 1
+        return type("Ctx", (), {"column_types": [f"type:{c}" for c in column_names]})()
+
+    def insert(self, **kwargs):
+        if self.fail_inserts:
+            self.fail_inserts -= 1
+            raise RuntimeError("Code: 16. No such column")
+        self.inserts.append(kwargs)
+
+
+@pytest.fixture
+def recording_client(monkeypatch):
+    client = _RecordingClient()
+    monkeypatch.setattr(clickhouse_service, "_shared_client", lambda: client)
+    monkeypatch.setattr(clickhouse_service, "_column_types", {})
+    return client
+
+
+def test_a_table_is_described_once_not_before_every_insert(recording_client):
+    for _ in range(3):
+        clickhouse_service.ClickHouseService().insert_rows("db.raw_events", [{"user_id": "u", "event_name": "e"}])
+    assert recording_client.type_lookups == 1
+    assert recording_client.inserts[-1]["column_types"] == ["type:user_id", "type:event_name"]
+
+
+def test_a_different_column_set_gets_its_own_types(recording_client):
+    service = clickhouse_service.ClickHouseService()
+    service.insert_rows("db.raw_events", [{"user_id": "u"}])
+    service.insert_rows("db.raw_events", [{"user_id": "u", "event_name": "e"}])
+    assert recording_client.type_lookups == 2
+
+
+def test_inserts_are_batched_by_the_server_and_still_wait_so_failures_raise(recording_client):
+    clickhouse_service.ClickHouseService().insert_rows("db.raw_events", [{"user_id": "u"}])
+    assert recording_client.inserts[0]["settings"] == {"async_insert": 1, "wait_for_async_insert": 1}
+
+
+def test_a_failed_insert_raises_and_looks_the_types_up_again_in_case_the_schema_changed(recording_client):
+    recording_client.fail_inserts = 1
+    service = clickhouse_service.ClickHouseService()
+    with pytest.raises(RuntimeError):
+        service.insert_rows("db.raw_events", [{"user_id": "u"}])
+    service.insert_rows("db.raw_events", [{"user_id": "u"}])
+    assert recording_client.type_lookups == 2
+    assert len(recording_client.inserts) == 1
