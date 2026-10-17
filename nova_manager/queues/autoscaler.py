@@ -99,4 +99,6 @@ class CloudRunScaler:
         annotations[MIN_SCALE] = str(count)
         annotations[MAX_SCALE] = str(MAX_WORKERS)
         resp = self.http.put(self.url, json=service, headers=self._headers())
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # Google names the missing permission in the body; raise_for_status alone drops it.
+            raise RuntimeError(f"setting minScale={count} failed: {resp.status_code} {resp.text[:500]}")

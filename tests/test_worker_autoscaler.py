@@ -81,7 +81,9 @@ class _FakeHttp:
 
     def put(self, url, json=None, headers=None):
         self.patched = (url, json)
-        return type("R", (), {"raise_for_status": lambda s: None})()
+        return type("R", (), {"status_code": self.status, "text": self.body})()
+
+    status, body = 200, "{}"
 
 
 def _service():
@@ -100,6 +102,13 @@ def test_scaling_replaces_the_service_as_read_with_only_the_scaling_annotations_
     assert body["metadata"]["resourceVersion"] == "v1"
     assert body["metadata"]["annotations"]["run.googleapis.com/minScale"] == "4"
     assert body["metadata"]["annotations"]["run.googleapis.com/maxScale"] == "6"
+
+
+def test_a_refused_update_reports_googles_reason():
+    http = _FakeHttp(_service())
+    http.status, http.body = 403, '{"error": {"message": "Permission \'iam.serviceaccounts.actAs\' denied"}}'
+    with pytest.raises(RuntimeError, match="actAs"):
+        a.CloudRunScaler("projects/p/locations/r/services/svc", http=http).set_min(6)
 
 
 def test_a_service_without_a_minimum_reads_as_zero():
