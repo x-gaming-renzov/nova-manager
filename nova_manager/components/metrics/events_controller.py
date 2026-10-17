@@ -259,8 +259,17 @@ class EventsController(EventsArtefacts):
         )
 
     def track_user_experience(self, user_experience: UserExperience, external_user_id: str | None = None):
+        # Kept for jobs enqueued before assignments were batched; new code calls track_user_experiences.
+        self.track_user_experiences([user_experience], external_user_id)
+
+    def track_user_experiences(self, user_experiences: list[UserExperience], external_user_id: str | None = None):
+        rows = [self._user_experience_row(ue, external_user_id) for ue in user_experiences]
+        ClickHouseService().insert_rows(self._user_experience_table_name(), rows)
+
+    @staticmethod
+    def _user_experience_row(user_experience: UserExperience, external_user_id: str | None) -> dict:
         ch_user_id = external_user_id if external_user_id else str(user_experience.user_id)
-        user_experience_row = {
+        return {
             "user_id": ch_user_id,
             "experience_id": str(user_experience.experience_id),
             "personalisation_id": str(user_experience.personalisation_id) if user_experience.personalisation_id else "",
@@ -270,10 +279,6 @@ class EventsController(EventsArtefacts):
             "evaluation_reason": user_experience.evaluation_reason or "",
             "assigned_at": user_experience.assigned_at.isoformat() if user_experience.assigned_at else datetime.now(timezone.utc).isoformat(),
         }
-
-        ClickHouseService().insert_rows(
-            self._user_experience_table_name(), [user_experience_row]
-        )
 
     def track_user_profile(self, user_id: str, old_profile: dict, user_profile: dict):
         changed_profile = {

@@ -109,16 +109,15 @@ class UserExperienceAsyncCRUD:
             res = await self.db.execute(sel)
             instances = list(res.scalars().all())
 
-            # Enqueue a task per inserted instance using the existing EventsController
-            for inst in instances:
-                try:
-                    QueueController().add_task(
-                        EventsController(inst.organisation_id, inst.app_id).track_user_experience,
-                        inst,
-                        external_user_id=external_user_id,
-                    )
-                except Exception:
-                    # Swallow enqueue errors; ClickHouse failure should not break main flow
-                    # Logging is deliberately omitted here to keep this method lightweight;
-                    # higher-level callers already log errors around DB operations.
-                    pass
+            # One job for the whole call: a job per assignment was ~40% of all queued jobs.
+            try:
+                QueueController().add_task(
+                    EventsController(organisation_id, app_id).track_user_experiences,
+                    instances,
+                    external_user_id=external_user_id,
+                )
+            except Exception:
+                # Swallow enqueue errors; ClickHouse failure should not break main flow
+                # Logging is deliberately omitted here to keep this method lightweight;
+                # higher-level callers already log errors around DB operations.
+                pass

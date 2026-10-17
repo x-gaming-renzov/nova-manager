@@ -129,27 +129,7 @@ else
     --execute-now --wait
 fi
 
-# 5. Deploy API
-echo "=== Deploying API ($IMAGE_NAME) ==="
-gcloud run deploy "$IMAGE_NAME" \
-  --image="$FULL_IMAGE" \
-  --region="$REGION" \
-  --platform=managed \
-  --allow-unauthenticated \
-  --add-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
-  --vpc-connector="$VPC_CONNECTOR" \
-  --service-account="$SA_EMAIL" \
-  --set-secrets="DATABASE_URL=${DB_URL_SECRET}:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,BREVO_API_KEY=BREVO_API_KEY:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest,NOTICE_SERVICE_SECRET=NOTICE_SERVICE_SECRET:latest,NOTICE_SERVICE_URL=NOTICE_SERVICE_URL:latest,NOVA_ADMIN_KEY=NOVA_ADMIN_KEY:latest" \
-  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,NOVA_ENV=${NOVA_ENV}" \
-  --memory=512Mi \
-  --cpu=1 \
-  --min-instances=0 \
-  --max-instances=10 \
-  --concurrency=80 \
-  --port=8000 \
-  --project="$PROJECT_ID"
-
-# 6. Deploy Worker. Production scales 1-6 on its queue (step 6b); staging stays small.
+# 5. Deploy Worker first. Production scales 1-6 on its queue (step 6b); staging stays small.
 # Production runs 3 jobs at a time per instance (each process ~160 MB, ~28% CPU), hence 1 GiB.
 if [[ "$DEPLOY_ENV" == "production" ]]; then
   WORKER_MAX_INSTANCES=6; WORKER_PROCESSES=3; WORKER_MEMORY=1Gi
@@ -176,6 +156,26 @@ gcloud run deploy "$WORKER_NAME" \
   --min-instances=1 \
   --max-instances="$WORKER_MAX_INSTANCES" \
   --port=8080 \
+  --project="$PROJECT_ID"
+
+# 6. Deploy API, after the worker: a job the new API enqueues must find a worker that knows it.
+echo "=== Deploying API ($IMAGE_NAME) ==="
+gcloud run deploy "$IMAGE_NAME" \
+  --image="$FULL_IMAGE" \
+  --region="$REGION" \
+  --platform=managed \
+  --allow-unauthenticated \
+  --add-cloudsql-instances="$CLOUD_SQL_INSTANCE" \
+  --vpc-connector="$VPC_CONNECTOR" \
+  --service-account="$SA_EMAIL" \
+  --set-secrets="DATABASE_URL=${DB_URL_SECRET}:latest,JWT_SECRET_KEY=JWT_SECRET_KEY:latest,REDIS_URL=REDIS_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,BREVO_API_KEY=BREVO_API_KEY:latest,CLICKHOUSE_PASSWORD=CLICKHOUSE_PASSWORD:latest,NOTICE_SERVICE_SECRET=NOTICE_SERVICE_SECRET:latest,NOTICE_SERVICE_URL=NOTICE_SERVICE_URL:latest,NOVA_ADMIN_KEY=NOVA_ADMIN_KEY:latest" \
+  --set-env-vars="CLICKHOUSE_HOST=${DATA_VM_IP},CLICKHOUSE_PORT=8123,CLICKHOUSE_USER=default,NOVA_ENV=${NOVA_ENV}" \
+  --memory=512Mi \
+  --cpu=1 \
+  --min-instances=0 \
+  --max-instances=10 \
+  --concurrency=80 \
+  --port=8000 \
   --project="$PROJECT_ID"
 
 # 6b. Production worker autoscaler: Cloud Run scales on CPU/requests, and a worker waiting on

@@ -159,3 +159,61 @@ def test_a_failed_insert_raises_and_looks_the_types_up_again_in_case_the_schema_
     service.insert_rows("db.raw_events", [{"user_id": "u"}])
     assert recording_client.type_lookups == 2
     assert len(recording_client.inserts) == 1
+
+
+def _assignment(experience_id):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        user_id="nova-user", experience_id=experience_id, personalisation_id=None, personalisation_name=None,
+        experience_variant_id=None, features={"f": 1}, evaluation_reason="default", assigned_at=None,
+    )
+
+
+def test_all_assignments_from_one_call_go_to_clickhouse_in_one_insert(recording_client):
+    from nova_manager.components.metrics.events_controller import EventsController
+
+    EventsController("org", "app").track_user_experiences([_assignment("e1"), _assignment("e2"), _assignment("e3")], "ext")
+    assert len(recording_client.inserts) == 1
+    assert [row[0] for row in recording_client.inserts[0]["data"]] == ["ext", "ext", "ext"]
+
+
+def test_jobs_queued_before_batching_still_write_their_single_assignment(recording_client):
+    from nova_manager.components.metrics.events_controller import EventsController
+
+    EventsController("org", "app").track_user_experience(_assignment("e1"))
+    assert len(recording_client.inserts) == 1
+    assert recording_client.inserts[0]["data"][0][0] == "nova-user"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="rq cannot be imported without fork()")
+@pytest.mark.asyncio
+async def test_creating_many_assignments_enqueues_one_job_not_one_per_assignment(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from nova_manager.components.user_experience import crud_async
+    from nova_manager.components.user_experience.schemas import UserExperienceAssignment
+
+    instances = [object(), object(), object()]
+    db = MagicMock()
+    db.commit = AsyncMock()
+    db.execute = AsyncMock(side_effect=[
+        MagicMock(scalars=lambda: MagicMock(all=lambda: [1, 2, 3])),  # INSERT ... RETURNING id
+        MagicMock(scalars=lambda: MagicMock(all=lambda: instances)),  # reload the inserted rows
+    ])
+    queue = MagicMock()
+    monkeypatch.setattr(crud_async, "QueueController", lambda: queue)
+    assignments = [
+        UserExperienceAssignment.model_construct(experience_id=f"e{i}", personalisation_id=None, personalisation_name=None,
+                                                 experience_variant_id=None, features={}, evaluation_reason="default")
+        for i in range(3)
+    ]
+
+    await crud_async.UserExperienceAsyncCRUD(db).bulk_create_user_experience_personalisations(
+        "nova-user", "org", "app", assignments, external_user_id="ext"
+    )
+
+    queue.add_task.assert_called_once()
+    func, batch = queue.add_task.call_args.args
+    assert func.__name__ == "track_user_experiences" and batch == instances
+    assert queue.add_task.call_args.kwargs == {"external_user_id": "ext"}
