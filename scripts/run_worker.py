@@ -6,10 +6,9 @@ Run this script to process background tasks from the Redis queue
 
 import sys
 import os
-import platform
 import signal
 import argparse
-from rq import Worker, SimpleWorker, Queue
+from rq import SimpleWorker, Queue
 from redis import from_url
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -50,6 +49,16 @@ def handle_sigterm(signum, frame):
     sys.exit(0)
 
 
+def build_worker(queue: Queue, conn) -> SimpleWorker:
+    """Run jobs in this process instead of forking one per job.
+
+    The forking Worker re-imported the app and reopened Postgres/ClickHouse in every child,
+    ~2s of overhead around ~0.15s jobs, which capped throughput below launch traffic and
+    let the queue fall hours behind.
+    """
+    return SimpleWorker([queue], connection=conn)
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Run RQ worker for Nova Manager")
@@ -80,22 +89,8 @@ def main():
         conn = from_url(REDIS_URL)
         logger.info(f"Connected to Redis at {REDIS_URL}")
 
-        # Import worker dependencies here to make sure they're loaded
-        # These imports ensure the worker has access to all necessary code
-
-        logger.info("Required modules loaded successfully")
-
-        # Create queue with explicit connection
         queue = Queue(args.queue, connection=conn)
-
-        # Use SimpleWorker on macOS to avoid fork() crash with ObjC runtime
-        # (ClickHouse/psycopg2 C extensions crash when forked on macOS)
-        # In production (Linux), use the default Worker which forks for isolation.
-        if platform.system() == "Darwin":
-            logger.info("macOS detected — using SimpleWorker (no fork)")
-            worker = SimpleWorker([queue], connection=conn)
-        else:
-            worker = Worker([queue], connection=conn)
+        worker = build_worker(queue, conn)
 
         logger.info(f"Worker initialized, processing jobs from {args.queue} queue...")
         worker.work(burst=args.burst)

@@ -1,3 +1,6 @@
+import os
+import threading
+
 import clickhouse_connect
 from clickhouse_connect.driver import Client
 
@@ -20,15 +23,29 @@ def _get_client() -> Client:
     )
 
 
+_local = threading.local()
+
+
+def _shared_client() -> Client:
+    """One client per thread, rebuilt after a fork.
+
+    A client holds a session, which refuses concurrent queries, so API threads can't share
+    one; a forked child must not reuse the parent's sockets.
+    """
+    if getattr(_local, "pid", None) != os.getpid():
+        _local.client = _get_client()
+        _local.pid = os.getpid()
+    return _local.client
+
+
 class ClickHouseService:
     def __init__(self):
         self._client = None
 
     @property
     def client(self):
-        """Lazy-init: create connection only when first used (after RQ fork)."""
         if self._client is None:
-            self._client = _get_client()
+            self._client = _shared_client()
         return self._client
 
     def insert_rows(self, table_name: str, rows: list[dict]):
