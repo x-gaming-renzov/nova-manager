@@ -5,7 +5,9 @@ from sqlalchemy.orm import sessionmaker
 from nova_manager.core.config import DATABASE_URL
 from nova_manager.core.log import logger
 
-engine = create_engine(DATABASE_URL)
+# Cloud SQL drops idle connections; check one before use so a job doesn't fail mid-way
+# (after its ClickHouse insert, so its retry writes the events twice).
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

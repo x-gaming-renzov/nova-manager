@@ -316,3 +316,10 @@ def test_the_job_log_names_events_without_their_personal_data(schema_store, monk
     monkeypatch.setattr(ec.logger, "info", lambda msg, *a, **k: logged.append(msg))
     _track(phone="+919999999999")
     assert "level_up" in logged[0] and "+919999999999" not in logged[0]
+
+
+def test_the_worker_checks_a_pooled_postgres_connection_before_using_it():
+    from nova_manager.database.session import engine
+
+    # A connection Cloud SQL already closed would fail the job after its ClickHouse insert.
+    assert engine.pool._pre_ping is True
