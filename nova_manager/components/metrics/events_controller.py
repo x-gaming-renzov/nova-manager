@@ -454,14 +454,15 @@ class EventsController(EventsArtefacts):
                     f"SELECT * REPLACE('{safe_identified}' AS user_id) "
                     f"FROM {table} WHERE user_id = '{safe_anon}'"
                 )
-                ch.execute(insert_stmt)
+                copied = ch.execute(insert_stmt)
 
-                # 2. Remove the old anon rows (async mutation in ClickHouse)
-                delete_stmt = (
-                    f"ALTER TABLE {table} DELETE "
-                    f"WHERE user_id = '{safe_anon}'"
-                )
-                ch.execute(delete_stmt)
+                # 2. Remove the old anon rows. Nearly half of identifies have no anon rows in a
+                #    table; a DELETE there would still queue a mutation over every part.
+                #    Lightweight DELETE only masks rows (ALTER DELETE rewrote whole parts,
+                #    ~26 GiB per 10 min); sync=0 keeps it asynchronous, as ALTER DELETE was.
+                if getattr(copied, "written_rows", 1):
+                    delete_stmt = f"DELETE FROM {table} WHERE user_id = '{safe_anon}'"
+                    ch.execute(delete_stmt, settings={"lightweight_deletes_sync": 0})
                 completed_tables.append(table)
             except Exception as e:
                 logger.error(

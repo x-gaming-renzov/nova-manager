@@ -543,12 +543,12 @@ class TestEventsControllerReconcile:
             controller = EventsController(TEST_ORG_ID, TEST_APP_ID)
             controller.reconcile_user_in_clickhouse("anon-xyz", "id-xyz")
 
-            # 4 tables × 2 calls each (INSERT … SELECT + ALTER TABLE DELETE)
+            # 4 tables × 2 calls each (INSERT … SELECT + DELETE)
             assert mock_ch.execute.call_count == 8
 
             calls = [c.args[0] for c in mock_ch.execute.call_args_list]
             insert_calls = [c for c in calls if c.startswith("INSERT")]
-            delete_calls = [c for c in calls if c.startswith("ALTER TABLE")]
+            delete_calls = [c for c in calls if c.startswith("DELETE FROM")]
             assert len(insert_calls) == 4
             assert len(delete_calls) == 4
             for stmt in insert_calls:
@@ -556,6 +556,29 @@ class TestEventsControllerReconcile:
                 assert "id-xyz" in stmt
             for stmt in delete_calls:
                 assert "anon-xyz" in stmt
+
+    async def test_reconcile_deletes_with_an_asynchronous_lightweight_delete(self):
+        with patch("nova_manager.components.metrics.events_controller.ClickHouseService") as MockCH:
+            mock_ch = MagicMock()
+            MockCH.return_value = mock_ch
+            EventsController(TEST_ORG_ID, TEST_APP_ID).reconcile_user_in_clickhouse("anon-xyz", "id-xyz")
+
+            deletes = [c for c in mock_ch.execute.call_args_list if c.args[0].startswith("DELETE FROM")]
+            assert deletes and all(c.kwargs["settings"] == {"lightweight_deletes_sync": 0} for c in deletes)
+
+    async def test_reconcile_skips_the_delete_in_tables_where_the_anon_user_had_no_rows(self):
+        with patch("nova_manager.components.metrics.events_controller.ClickHouseService") as MockCH:
+            mock_ch = MagicMock()
+            # Only the second table (event_props) held rows for this anonymous user.
+            mock_ch.execute.side_effect = lambda stmt, settings=None: MagicMock(
+                written_rows=3 if stmt.startswith("INSERT INTO") and ".event_props " in stmt else 0
+            )
+            MockCH.return_value = mock_ch
+            controller = EventsController(TEST_ORG_ID, TEST_APP_ID)
+            controller.reconcile_user_in_clickhouse("anon-xyz", "id-xyz")
+
+            deletes = [c.args[0] for c in mock_ch.execute.call_args_list if c.args[0].startswith("DELETE FROM")]
+            assert deletes == [f"DELETE FROM {controller._event_props_table_name()} WHERE user_id = 'anon-xyz'"]
 
     async def test_reconcile_user_escapes_sql_injection(self):
         with patch(

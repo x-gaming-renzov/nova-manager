@@ -106,9 +106,12 @@ class ClickHouseService:
             logger.error(f"ClickHouse query failed: {str(e)}")
             raise e
 
-    def execute(self, statement: str):
-        """Execute a DDL or non-query statement (CREATE TABLE, CREATE DATABASE, etc.)."""
-        self.client.command(statement)
+    def execute(self, statement: str, settings: dict | None = None):
+        """Execute a DDL or non-query statement (CREATE TABLE, CREATE DATABASE, etc.).
+
+        Returns the driver's result: for an INSERT, a summary whose written_rows says how many rows it wrote.
+        """
+        return self.client.command(statement, settings=settings)
 
     def create_database_if_not_exists(self, database_name: str):
         """Create a ClickHouse database (replaces BigQuery dataset)."""
