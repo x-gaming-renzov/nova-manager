@@ -93,7 +93,11 @@ def main():
         worker = build_worker(queue, conn)
 
         logger.info(f"Worker initialized, processing jobs from {args.queue} queue...")
-        worker.work(burst=args.burst)
+        # The scheduler runs the retry intervals. work() returns on SIGTERM (after finishing the
+        # current job) or when it gives up on Redis; either way exit, so Cloud Run replaces the
+        # instance instead of keeping a container whose health check answers but takes no jobs.
+        worker.work(burst=args.burst, with_scheduler=True)
+        sys.exit(0 if worker._stop_requested else 1)
 
     except Exception as e:
         logger.error(f"Error starting worker: {str(e)}")

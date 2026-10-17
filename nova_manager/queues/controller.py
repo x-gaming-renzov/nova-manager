@@ -1,11 +1,14 @@
 from typing import Callable, Optional
 
 import redis
-from rq import Queue
+from rq import Queue, Retry
 from rq.job import Job
 
 
 from nova_manager.core.config import REDIS_URL, RQ_QUEUE_NAME
+
+
+JOB_RETRY = Retry(max=3, interval=[10, 30, 60])
 
 
 class QueueController:
@@ -26,7 +29,9 @@ class QueueController:
 
     def add_task(self, func: Callable, *args, **kwargs) -> str:
         """Add a task and return task ID"""
-        job = self.default_queue.enqueue(func, *args, **kwargs)
+        # Retried after a ClickHouse/Redis blip or when a scaled-down worker abandons it, so a
+        # restart no longer strands jobs in the failed registry.
+        job = self.default_queue.enqueue(func, *args, retry=JOB_RETRY, **kwargs)
         return job.id
 
     def get_task_status(self, job_id: str):

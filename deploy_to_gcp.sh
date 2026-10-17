@@ -149,7 +149,8 @@ gcloud run deploy "$IMAGE_NAME" \
   --port=8000 \
   --project="$PROJECT_ID"
 
-# 6. Deploy Worker
+# 6. Deploy Worker. Production scales 1-6 on its queue (step 6b); staging stays small.
+if [[ "$DEPLOY_ENV" == "production" ]]; then WORKER_MAX_INSTANCES=6; else WORKER_MAX_INSTANCES=3; fi
 echo "=== Deploying Worker ($WORKER_NAME) ==="
 gcloud run deploy "$WORKER_NAME" \
   --image="$FULL_IMAGE" \
@@ -168,9 +169,35 @@ gcloud run deploy "$WORKER_NAME" \
   --no-cpu-throttling \
   --concurrency=1 \
   --min-instances=1 \
-  --max-instances=3 \
+  --max-instances="$WORKER_MAX_INSTANCES" \
   --port=8080 \
   --project="$PROJECT_ID"
+
+# 6b. Production worker autoscaler: Cloud Run scales on CPU/requests, and a worker waiting on
+# ClickHouse looks idle, so a job sets the worker's minimum instances from the queue each minute.
+# One-time grants for $SA_EMAIL (done by hand): run.developer on the worker service,
+# iam.serviceAccountUser on itself, run.invoker on the autoscaler job.
+if [[ "$DEPLOY_ENV" == "production" ]]; then
+  AUTOSCALER="nova-worker-autoscaler"
+  echo "=== Deploying worker autoscaler ($AUTOSCALER) ==="
+  gcloud run jobs deploy "$AUTOSCALER" \
+    --image="$FULL_IMAGE" \
+    --region="$REGION" \
+    --command="python" \
+    --args="scripts/autoscale_workers.py" \
+    --vpc-connector="$VPC_CONNECTOR" \
+    --service-account="$SA_EMAIL" \
+    --set-secrets="REDIS_URL=REDIS_URL:latest" \
+    --set-env-vars="WORKER_SERVICE_PATH=projects/${PROJECT_ID}/locations/${REGION}/services/${WORKER_NAME},NOVA_ENV=${NOVA_ENV},PYTHONPATH=//app" \
+    --cpu=1 --memory=512Mi --max-retries=0 --task-timeout=60s \
+    --project="$PROJECT_ID"
+  if ! gcloud scheduler jobs describe "$AUTOSCALER" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud scheduler jobs create http "$AUTOSCALER" --location="$REGION" --project="$PROJECT_ID" \
+      --schedule="* * * * *" --http-method=POST \
+      --uri="https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/${AUTOSCALER}:run" \
+      --oauth-service-account-email="$SA_EMAIL"
+  fi
+fi
 
 # 7. Notice Service (only for production — staging shares it)
 if [[ "$DEPLOY_ENV" == "production" ]]; then
