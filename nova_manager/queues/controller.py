@@ -31,7 +31,11 @@ class QueueController:
         """Add a task and return task ID"""
         # Retried after a ClickHouse/Redis blip or when a scaled-down worker abandons it, so a
         # restart no longer strands jobs in the failed registry.
-        job = self.default_queue.enqueue(func, *args, retry=JOB_RETRY, **kwargs)
+        # rq logs a job's description when it starts and finishes; by default that is the call
+        # with its arguments, which carry players' event payloads and profiles.
+        job = self.default_queue.enqueue(
+            func, *args, retry=JOB_RETRY, description=func.__qualname__, **kwargs
+        )
         return job.id
 
     def get_task_status(self, job_id: str):

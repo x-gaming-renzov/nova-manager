@@ -135,3 +135,30 @@ def test_jobs_are_enqueued_with_retries(monkeypatch):
     monkeypatch.setattr(controller.QueueController, "_initialized", False)
     controller.QueueController().add_task(print, "x")
     assert seen["retry"].max == 3
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="rq cannot be imported without fork()")
+def test_a_jobs_logged_description_names_the_function_without_its_arguments(monkeypatch):
+    from nova_manager.queues import controller
+
+    seen = {}
+
+    class FakeQueue:
+        def __init__(self, *a, **k):
+            pass
+
+        def enqueue(self, func, *args, **kwargs):
+            seen.update(kwargs)
+            return type("J", (), {"id": "j"})()
+
+    class Controller:
+        def track_events(self, user_id, events):
+            pass
+
+    monkeypatch.setattr(controller.redis, "from_url", lambda url: object())
+    monkeypatch.setattr(controller, "Queue", FakeQueue)
+    monkeypatch.setattr(controller.QueueController, "_instance", None)
+    monkeypatch.setattr(controller.QueueController, "_initialized", False)
+    controller.QueueController().add_task(Controller().track_events, "u1", [{"event_data": {"phone": "+91999"}}])
+    assert seen["description"].endswith("Controller.track_events")
+    assert "+91999" not in seen["description"]
