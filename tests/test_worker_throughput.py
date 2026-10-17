@@ -217,3 +217,92 @@ async def test_creating_many_assignments_enqueues_one_job_not_one_per_assignment
     func, batch = queue.add_task.call_args.args
     assert func.__name__ == "track_user_experiences" and batch == instances
     assert queue.add_task.call_args.kwargs == {"external_user_id": "ext"}
+
+
+class _SchemaStore:
+    """Stands in for Postgres: counts reads and writes of event schema rows."""
+
+    def __init__(self):
+        self.rows = {}
+        self.reads = self.creates = self.updates = 0
+
+    def crud(self, db):
+        store = self
+
+        class Crud:
+            def get_events_schema(self, names, org, app):
+                store.reads += 1
+                return [r for r in store.rows.values() if r.event_name in names and r.app_id == app]
+
+            def bulk_create(self, objs):
+                store.creates += len(objs)
+                for o in objs:
+                    store.rows[(o.app_id, o.event_name)] = o
+
+            def bulk_update(self, objs):
+                store.updates += len(objs)
+
+        return Crud()
+
+
+@pytest.fixture
+def schema_store(monkeypatch):
+    import contextlib
+
+    from nova_manager.components.metrics import events_controller as ec
+
+    store = _SchemaStore()
+    monkeypatch.setattr(ec, "db_session", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(ec, "EventsSchemaCRUD", store.crud)
+    monkeypatch.setattr(ec, "flag_modified", lambda obj, attr: None)
+    monkeypatch.setattr(ec, "_known_schema_keys", {})
+    monkeypatch.setattr(ec.EventsController, "push_to_clickhouse", lambda self, raw, props: store.__dict__.setdefault("pushed", []).append(raw))
+    return store
+
+
+def _track(app="app", **event_data):
+    from nova_manager.components.metrics.events_controller import EventsController
+
+    EventsController("org", app).track_events("u1", [{"event_name": "level_up", "event_data": event_data}])
+
+
+def test_a_repeat_event_with_known_keys_skips_postgres_but_still_reaches_clickhouse(schema_store):
+    _track(level=1)
+    reads, writes = schema_store.reads, schema_store.creates + schema_store.updates
+    _track(level=2)
+    assert (schema_store.reads, schema_store.creates + schema_store.updates) == (reads, writes)
+    assert len(schema_store.pushed) == 2
+
+
+def test_a_new_property_goes_back_to_postgres_and_is_added_to_the_schema(schema_store):
+    _track(level=1)
+    _track(level=2, coins=5)
+    assert schema_store.reads == 2 and schema_store.updates == 1
+    assert set(schema_store.rows[("app", "level_up")].event_schema["properties"]) == {"level", "coins"}
+
+
+def test_an_existing_schema_that_gained_nothing_is_not_rewritten(schema_store, monkeypatch):
+    from nova_manager.components.metrics import events_controller as ec
+
+    _track(level=1)
+    monkeypatch.setattr(ec, "_known_schema_keys", {})  # another worker process, cold cache
+    _track(level=2)
+    assert schema_store.reads == 2 and schema_store.updates == 0
+
+
+def test_the_cache_expires_so_a_schema_row_removed_elsewhere_is_recreated(schema_store, monkeypatch):
+    from nova_manager.components.metrics import events_controller as ec
+
+    now = [1000.0]
+    monkeypatch.setattr(ec.time, "monotonic", lambda: now[0])
+    _track(level=1)
+    now[0] += ec.SCHEMA_CACHE_TTL_S + 1
+    _track(level=1)
+    assert schema_store.reads == 2
+
+
+def test_another_app_does_not_reuse_this_apps_cached_schema(schema_store):
+    _track(app="app-a", level=1)
+    _track(app="app-b", level=1)
+    assert schema_store.reads == 2 and schema_store.creates == 2
+

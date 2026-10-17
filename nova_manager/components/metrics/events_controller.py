@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import json
+import time
 from typing import TypedDict
 import uuid
 from sqlalchemy.orm.attributes import flag_modified
@@ -14,6 +15,12 @@ from nova_manager.components.metrics.crud import EventsSchemaCRUD, UserProfileKe
 from nova_manager.components.user_experience.models import UserExperience
 from nova_manager.components.metrics.models import EventsSchema
 from nova_manager.components.users.models import Users
+
+
+# Per worker process: (organisation, app, event name) -> (property keys stored, when seen).
+# The TTL bounds how long a schema row removed elsewhere stays unrecreated.
+_known_schema_keys: dict[tuple[str, str, str], tuple[frozenset[str], float]] = {}
+SCHEMA_CACHE_TTL_S = 600
 
 
 class TrackEvent(TypedDict):
@@ -126,6 +133,20 @@ class EventsController(EventsArtefacts):
             logger.error(f"ClickHouse insertion failed: {str(e)}")
             raise e
 
+    def _schema_already_has(self, keys_by_event: dict[str, set[str]]) -> bool:
+        now = time.monotonic()
+        for event_name, keys in keys_by_event.items():
+            cached = _known_schema_keys.get((self.organisation_id, self.app_id, event_name))
+            if not cached or now - cached[1] > SCHEMA_CACHE_TTL_S or not keys <= cached[0]:
+                return False
+        return True
+
+    def _remember_schema_keys(self, events_schema_map: dict[str, dict]):
+        now = time.monotonic()
+        for event_name, schema in events_schema_map.items():
+            keys = frozenset((schema or {}).get("properties") or {})
+            _known_schema_keys[(self.organisation_id, self.app_id, event_name)] = (keys, now)
+
     def track_events(self, user_id: str, events: list[TrackEvent]):
         logger.info(
             f"EventsController.track_events: user_id={user_id}, org={self.organisation_id}, app={self.app_id}, events={events}"
@@ -137,19 +158,32 @@ class EventsController(EventsArtefacts):
 
         unique_event_names = list(set([event["event_name"] for event in events]))
 
+        keys_by_event: dict[str, set[str]] = {name: set() for name in unique_event_names}
+        for event in events:
+            keys_by_event[event["event_name"]].update(event.get("event_data") or {})
+        # Schemas only gain keys, so when this worker has already stored every key seen here,
+        # neither the read nor the write below would change anything.
+        schema_up_to_date = self._schema_already_has(keys_by_event)
+
         events_schema_objs_map = {}
         events_schema_map = {}
-        with db_session() as db:
-            events_schema = EventsSchemaCRUD(db).get_events_schema(
-                unique_event_names, self.organisation_id, self.app_id
-            )
+        original_keys: dict[str, set[str]] = {}
+        if not schema_up_to_date:
+            with db_session() as db:
+                events_schema = EventsSchemaCRUD(db).get_events_schema(
+                    unique_event_names, self.organisation_id, self.app_id
+                )
 
-            events_schema_map = {
-                schema.event_name: schema.event_schema for schema in events_schema
-            }
-            events_schema_objs_map = {
-                schema.event_name: schema for schema in events_schema
-            }
+                events_schema_map = {
+                    schema.event_name: schema.event_schema for schema in events_schema
+                }
+                events_schema_objs_map = {
+                    schema.event_name: schema for schema in events_schema
+                }
+                original_keys = {
+                    schema.event_name: set((schema.event_schema or {}).get("properties") or {})
+                    for schema in events_schema
+                }
 
         new_events: list[str] = []
         existing_events: list[str] = []
@@ -207,7 +241,10 @@ class EventsController(EventsArtefacts):
 
         self.push_to_clickhouse(raw_events_rows, all_event_props_rows)
 
-        # Update event schemas in PostgreSQL (unchanged)
+        if schema_up_to_date:
+            return
+
+        # Update event schemas in PostgreSQL
         with db_session() as db:
             crud = EventsSchemaCRUD(db)
 
@@ -225,6 +262,8 @@ class EventsController(EventsArtefacts):
                 to_insert.append(new_schema)
 
             for event_name in existing_events:
+                if set(events_schema_map[event_name]["properties"]) == original_keys[event_name]:
+                    continue
                 existing_event_schema_obj = events_schema_objs_map[event_name]
                 existing_event_schema_obj.event_schema = events_schema_map[event_name]
 
@@ -233,6 +272,8 @@ class EventsController(EventsArtefacts):
 
             crud.bulk_create(to_insert)
             crud.bulk_update(to_update)
+
+        self._remember_schema_keys(events_schema_map)
 
     def track_event(
         self,
