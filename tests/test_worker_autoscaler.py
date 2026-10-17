@@ -79,20 +79,31 @@ class _FakeHttp:
         body = {"access_token": "t"} if "metadata" in url else self.service
         return type("R", (), {"json": lambda s: body, "raise_for_status": lambda s: None})()
 
-    def patch(self, url, params=None, json=None, headers=None):
-        self.patched = (params, json)
+    def put(self, url, json=None, headers=None):
+        self.patched = (url, json)
         return type("R", (), {"raise_for_status": lambda s: None})()
 
 
-def test_scaling_sends_the_whole_service_back_with_only_the_minimum_changed():
-    service = {"name": "svc", "etag": "e1", "template": {"containers": [{"image": "img"}]},
-               "scaling": {"minInstanceCount": 1, "maxInstanceCount": 6}}
+def _service():
+    return {"metadata": {"name": "svc", "resourceVersion": "v1", "annotations": {"run.googleapis.com/maxScale": "20"}},
+            "spec": {"template": {"metadata": {"annotations": {"run.googleapis.com/vpc-access-connector": "nova-connector"}},
+                                  "spec": {"containers": [{"image": "img"}]}}}}
+
+
+def test_scaling_replaces_the_service_as_read_with_only_the_scaling_annotations_changed():
+    service = _service()
     http = _FakeHttp(service)
-    a.CloudRunScaler("projects/p/locations/r/services/svc", http=http).set_min(4)
-    params, body = http.patched
-    assert params == {"updateMask": "scaling.minInstanceCount"}
-    assert body["template"] == service["template"] and body["etag"] == "e1"
-    assert body["scaling"] == {"minInstanceCount": 4, "maxInstanceCount": 6}
+    a.CloudRunScaler("projects/p/locations/us-central1/services/svc", http=http).set_min(4)
+    url, body = http.patched
+    assert url == "https://us-central1-run.googleapis.com/apis/serving.knative.dev/v1/namespaces/p/services/svc"
+    assert body["spec"] == _service()["spec"]  # template untouched: no new revision
+    assert body["metadata"]["resourceVersion"] == "v1"
+    assert body["metadata"]["annotations"]["run.googleapis.com/minScale"] == "4"
+    assert body["metadata"]["annotations"]["run.googleapis.com/maxScale"] == "6"
+
+
+def test_a_service_without_a_minimum_reads_as_zero():
+    assert a.CloudRunScaler("projects/p/locations/r/services/svc", http=_FakeHttp(_service())).current_min() == 0
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="rq cannot be imported without fork()")

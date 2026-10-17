@@ -62,11 +62,21 @@ def queue_stats(redis_conn, queue_name: str) -> tuple[int, float]:
 METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
 
 
+MIN_SCALE = "run.googleapis.com/minScale"
+MAX_SCALE = "run.googleapis.com/maxScale"
+
+
 class CloudRunScaler:
-    """Reads and sets a service's minimum instance count; service-level, so no new revision."""
+    """Reads and sets a service's minimum instance count through the service-level annotation,
+    which changes no template, so no new revision.
+
+    Uses the v1 (Knative) API, as gcloud does: v2 validates the stored template on every update
+    and rejects this service's short VPC connector name, so even a scaling-only PATCH fails.
+    """
 
     def __init__(self, service_path: str, http: Optional[httpx.Client] = None):
-        self.url = f"https://run.googleapis.com/v2/{service_path}"
+        _, project, _, region, _, name = service_path.split("/")
+        self.url = f"https://{region}-run.googleapis.com/apis/serving.knative.dev/v1/namespaces/{project}/services/{name}"
         self.http = http or httpx.Client(timeout=30)
 
     def _headers(self) -> dict:
@@ -79,14 +89,14 @@ class CloudRunScaler:
         return resp.json()
 
     def current_min(self) -> int:
-        return int((self._service().get("scaling") or {}).get("minInstanceCount") or 0)
+        return int(self._service()["metadata"].get("annotations", {}).get(MIN_SCALE) or 0)
 
     def set_min(self, count: int) -> None:
-        # Send back the service as read with only the count changed (and its etag), so a
-        # partial body can never strip the template, secrets or networking.
+        # Replace the service exactly as read (resourceVersion guards a concurrent change), with
+        # only the scaling annotations changed, so nothing else can be dropped.
         service = self._service()
-        service["scaling"] = {**(service.get("scaling") or {}), "minInstanceCount": count}
-        resp = self.http.patch(
-            self.url, params={"updateMask": "scaling.minInstanceCount"}, json=service, headers=self._headers()
-        )
+        annotations = service["metadata"].setdefault("annotations", {})
+        annotations[MIN_SCALE] = str(count)
+        annotations[MAX_SCALE] = str(MAX_WORKERS)
+        resp = self.http.put(self.url, json=service, headers=self._headers())
         resp.raise_for_status()
