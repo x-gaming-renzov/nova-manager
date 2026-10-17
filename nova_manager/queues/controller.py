@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Callable, Optional
 
 import redis
@@ -35,6 +36,14 @@ class QueueController:
         # with its arguments, which carry players' event payloads and profiles.
         job = self.default_queue.enqueue(
             func, *args, retry=JOB_RETRY, description=func.__qualname__, **kwargs
+        )
+        return job.id
+
+    def add_delayed_task(self, delay: timedelta, func: Callable, *args, **kwargs) -> str:
+        """Add a task that joins the queue after `delay` (the workers' scheduler moves it in),
+        so it lands behind every job enqueued before it plus `delay` worth of traffic."""
+        job = self.default_queue.enqueue_in(
+            delay, func, *args, retry=JOB_RETRY, description=func.__qualname__, **kwargs
         )
         return job.id
 

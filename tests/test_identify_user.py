@@ -370,16 +370,31 @@ class TestClickHouseJobEnqueue:
             json={"anonymous_id": "anon-ch1", "identified_id": "id-ch1"},
         )
 
-        calls = mock_queue.add_task.call_args_list
+        calls = mock_queue.add_delayed_task.call_args_list
         reconcile_calls = [
             c for c in calls
-            if len(c.args) >= 1 and hasattr(c.args[0], "__name__")
-            and c.args[0].__name__ == "reconcile_user_in_clickhouse"
+            if len(c.args) >= 2 and hasattr(c.args[1], "__name__")
+            and c.args[1].__name__ == "reconcile_user_in_clickhouse"
         ]
         assert len(reconcile_calls) >= 1
         call = reconcile_calls[0]
-        assert call.args[1] == "anon-ch1"
-        assert call.args[2] == "id-ch1"
+        assert call.args[2] == "anon-ch1"
+        assert call.args[3] == "id-ch1"
+
+    async def test_the_merge_waits_a_minute_so_the_anon_users_queued_events_are_stored_first(
+        self, test_client, async_db_session, mock_queue
+    ):
+        from datetime import timedelta
+
+        await test_client.post(
+            "/api/v1/users/identify/",
+            json={"anonymous_id": "anon-delay", "identified_id": "id-delay"},
+        )
+
+        (call,) = mock_queue.add_delayed_task.call_args_list
+        assert call.args[0] == timedelta(seconds=60)
+        immediate = [c.args[0].__name__ for c in mock_queue.add_task.call_args_list]
+        assert "reconcile_user_in_clickhouse" not in immediate
 
     async def test_clickhouse_profile_sync_enqueued(
         self, test_client, async_db_session, mock_queue
@@ -407,11 +422,11 @@ class TestClickHouseJobEnqueue:
             json={"anonymous_id": "no-pg-anon", "identified_id": "id-ch3"},
         )
 
-        calls = mock_queue.add_task.call_args_list
+        calls = mock_queue.add_delayed_task.call_args_list
         reconcile_calls = [
             c for c in calls
-            if len(c.args) >= 1 and hasattr(c.args[0], "__name__")
-            and c.args[0].__name__ == "reconcile_user_in_clickhouse"
+            if len(c.args) >= 2 and hasattr(c.args[1], "__name__")
+            and c.args[1].__name__ == "reconcile_user_in_clickhouse"
         ]
         assert len(reconcile_calls) >= 1
 
@@ -460,7 +475,7 @@ class TestRepeatIdentify:
         )
         assert resp1.json()["merged"] is True
 
-        mock_queue.add_task.reset_mock()
+        mock_queue.add_delayed_task.reset_mock()
 
         resp2 = await test_client.post(
             "/api/v1/users/identify/",
@@ -471,9 +486,9 @@ class TestRepeatIdentify:
 
         # CH reconcile still enqueued
         reconcile_calls = [
-            c for c in mock_queue.add_task.call_args_list
-            if len(c.args) >= 1 and hasattr(c.args[0], "__name__")
-            and c.args[0].__name__ == "reconcile_user_in_clickhouse"
+            c for c in mock_queue.add_delayed_task.call_args_list
+            if len(c.args) >= 2 and hasattr(c.args[1], "__name__")
+            and c.args[1].__name__ == "reconcile_user_in_clickhouse"
         ]
         assert len(reconcile_calls) >= 1
 

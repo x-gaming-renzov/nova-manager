@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,8 @@ from nova_manager.database.async_session import get_async_db
 from nova_manager.queues.controller import QueueController
 
 router = APIRouter()
+
+RECONCILE_DELAY = timedelta(seconds=60)
 
 
 @router.post("/create-user/", response_model=UserResponse)
@@ -176,7 +180,11 @@ async def identify_user(
         f"org={organisation_id} app={app_id} merged={merged}"
     )
 
-    QueueController().add_task(
+    # Delayed so it runs after the anonymous user's queued events: with several workers in
+    # parallel, a merge taken straight off the queue could run before an earlier event was
+    # stored, find nothing to move, and leave that event under the anonymous id.
+    QueueController().add_delayed_task(
+        RECONCILE_DELAY,
         events_controller.reconcile_user_in_clickhouse,
         data.anonymous_id,
         data.identified_id,

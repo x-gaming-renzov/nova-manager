@@ -124,13 +124,13 @@ class TestIdentifyCommitOrdering:
         # Track call ordering: we patch db.commit to record when it's called
         # relative to add_task calls
         call_log = []
-        original_add_task = mock_queue.add_task
+        original_add_delayed_task = mock_queue.add_delayed_task
 
-        def tracking_add_task(*args, **kwargs):
-            call_log.append(("add_task", args[0].__name__ if hasattr(args[0], "__name__") else str(args[0])))
-            return original_add_task(*args, **kwargs)
+        def tracking_add_delayed_task(delay, func, *args, **kwargs):
+            call_log.append(("add_task", func.__name__ if hasattr(func, "__name__") else str(func)))
+            return original_add_delayed_task(delay, func, *args, **kwargs)
 
-        mock_queue.add_task = tracking_add_task
+        mock_queue.add_delayed_task = tracking_add_delayed_task
 
         resp = await test_client.post(
             "/api/v1/users/identify/",
@@ -142,6 +142,28 @@ class TestIdentifyCommitOrdering:
         # Verify reconcile was enqueued
         task_names = [name for (action, name) in call_log if action == "add_task"]
         assert "reconcile_user_in_clickhouse" in task_names
+
+    async def test_a_failed_delayed_merge_enqueue_does_not_commit(
+        self, test_client, async_db_session
+    ):
+        """The merge is enqueued with a delay; failing there must also leave Postgres untouched."""
+        await self._create_user(async_db_session, "anon-fail2", {"x": 1})
+
+        with patch("nova_manager.api.users.router.QueueController") as MockQC:
+            mock_q = MagicMock()
+            mock_q.add_delayed_task.side_effect = RuntimeError("Redis connection refused")
+            MockQC.return_value = mock_q
+
+            with pytest.raises(RuntimeError, match="Redis connection refused"):
+                await test_client.post(
+                    "/api/v1/users/identify/",
+                    json={"anonymous_id": "anon-fail2", "identified_id": "id-fail2"},
+                )
+            mock_q.add_task.assert_not_called()
+
+        await async_db_session.rollback()
+        anon = await UsersAsyncCRUD(async_db_session).get_by_user_id("anon-fail2", TEST_ORG_ID, TEST_APP_ID)
+        assert anon is not None
 
     async def test_enqueue_failure_does_not_commit(
         self, test_client, async_db_session
