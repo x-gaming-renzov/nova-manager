@@ -130,10 +130,10 @@ else
 fi
 
 # 5. Deploy Worker first. Production scales 1-6 on its queue (step 6b); staging stays small.
-# Production runs 3 jobs at a time per instance (~28% CPU each). The processes share the
-# preloaded code, so 3 used ~165 MB together on staging and 512 MiB leaves room.
+# Production runs 3 jobs at a time per instance (~28% CPU each); on staging the 3 used
+# 62% of 512 MiB under light load, so production gets room for its traffic.
 if [[ "$DEPLOY_ENV" == "production" ]]; then
-  WORKER_MAX_INSTANCES=6; WORKER_PROCESSES=3; WORKER_MEMORY=512Mi
+  WORKER_MAX_INSTANCES=6; WORKER_PROCESSES=3; WORKER_MEMORY=768Mi
 else
   WORKER_MAX_INSTANCES=3; WORKER_PROCESSES=1; WORKER_MEMORY=512Mi
 fi
