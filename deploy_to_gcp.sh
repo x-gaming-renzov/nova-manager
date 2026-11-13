@@ -207,7 +207,8 @@ fi
 
 # 6c. Daily "Nova status" email (09:00 IST) covering prod and staging. Runs as nova-status-report,
 # which can only read monitoring/logging/compute/sql/run state and the Brevo key. Recipients live
-# on the job (set once: --update-env-vars=STATUS_REPORT_RECIPIENTS=a@x,b@y) so they stay out of git;
+# on the job (set once: --update-env-vars='^|^STATUS_REPORT_RECIPIENTS=a@x,b@y'; the ^|^ keeps gcloud
+# from splitting the list at its commas) so they stay out of git;
 # --update-env-vars here leaves them in place.
 if [[ "$DEPLOY_ENV" == "production" ]]; then
   STATUS_JOB="nova-daily-status"
