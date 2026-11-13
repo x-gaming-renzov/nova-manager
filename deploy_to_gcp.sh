@@ -205,6 +205,31 @@ if [[ "$DEPLOY_ENV" == "production" ]]; then
   fi
 fi
 
+# 6c. Daily "Nova status" email (09:00 IST) covering prod and staging. Runs as nova-status-report,
+# which can only read monitoring/logging/compute/sql/run state and the Brevo key. Recipients live
+# on the job (set once: --update-env-vars=STATUS_REPORT_RECIPIENTS=a@x,b@y) so they stay out of git;
+# --update-env-vars here leaves them in place.
+if [[ "$DEPLOY_ENV" == "production" ]]; then
+  STATUS_JOB="nova-daily-status"
+  echo "=== Deploying daily status email ($STATUS_JOB) ==="
+  gcloud run jobs deploy "$STATUS_JOB" \
+    --image="$FULL_IMAGE" \
+    --region="$REGION" \
+    --command="python" \
+    --args="scripts/daily_status_report.py" \
+    --service-account="nova-status-report@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --set-secrets="BREVO_API_KEY=BREVO_API_KEY:latest" \
+    --update-env-vars="PYTHONPATH=//app" \
+    --cpu=1 --memory=512Mi --max-retries=1 --task-timeout=300s \
+    --project="$PROJECT_ID"
+  if ! gcloud scheduler jobs describe "$STATUS_JOB" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud scheduler jobs create http "$STATUS_JOB" --location="$REGION" --project="$PROJECT_ID" \
+      --schedule="0 9 * * *" --time-zone="Asia/Kolkata" --http-method=POST \
+      --uri="https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/${STATUS_JOB}:run" \
+      --oauth-service-account-email="nova-status-report@${PROJECT_ID}.iam.gserviceaccount.com"
+  fi
+fi
+
 # 7. Notice Service (only for production — staging shares it)
 if [[ "$DEPLOY_ENV" == "production" ]]; then
   # Notice Service runs on a dedicated GCE VM, NOT Cloud Run.
