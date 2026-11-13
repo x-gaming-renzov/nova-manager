@@ -160,7 +160,7 @@ class QueryBuilder(EventsArtefacts):
         table_name = self._raw_events_table_name()
         from_expression = f"FROM {table_name} AS e"
 
-        wheres, where_joins = self._wheres_and_joins(event_name, filters)
+        wheres, where_joins = self._wheres_and_joins(event_name, filters, start, end)
 
         where_expression = (
             f"WHERE e.event_name = '{event_name}' AND e.client_ts >= '{start}' AND e.client_ts < '{end}'"
@@ -168,7 +168,7 @@ class QueryBuilder(EventsArtefacts):
         )
 
         group_props_join_expression = self._group_props_join_expression(
-            event_name, group_by
+            event_name, group_by, start, end
         )
 
         join_expression = "\n".join(where_joins + group_props_join_expression)
@@ -202,9 +202,13 @@ class QueryBuilder(EventsArtefacts):
 
         select_parts = self._get_select_parts(metric_config)
 
-        # ClickHouse: use toFloat64() instead of CAST(... AS FLOAT64)
+        # An event without the property joins as '' (join_use_nulls=0) and counts as NULL. A non-numeric
+        # value fails the query, so a money sum never comes back quietly short; the throwIf is explicit
+        # because ClickHouse 24.8 returns NULL, not an error, when toFloat64 gets a Nullable string.
+        value = "toFloat64OrNull(p_val.value)"
         aggregation_expression = (
-            f"{aggregation.upper()}(toFloat64(p_val.value)) AS value"
+            f"{aggregation.upper()}({value} + throwIf(p_val.value != '' AND {value} IS NULL, "
+            f"'non-numeric value in aggregated property {self._escape_sql_string(property)}')) AS value"
         )
         select_parts.append(aggregation_expression)
 
@@ -215,10 +219,10 @@ class QueryBuilder(EventsArtefacts):
         from_expression = f"FROM {table_name} AS e"
 
         property_join_expression = self._props_join_expression(
-            event_name, "p_val", property
+            event_name, "p_val", property, start, end
         )
 
-        wheres, where_joins = self._wheres_and_joins(event_name, filters)
+        wheres, where_joins = self._wheres_and_joins(event_name, filters, start, end)
 
         where_expression = (
             f"WHERE e.event_name = '{event_name}' AND e.client_ts >= '{start}' AND e.client_ts < '{end}'"
@@ -226,7 +230,7 @@ class QueryBuilder(EventsArtefacts):
         )
 
         group_props_join_expression = self._group_props_join_expression(
-            event_name, group_by
+            event_name, group_by, start, end
         )
 
         # Combine WHERE joins, group property joins, and the property join into one list
@@ -455,7 +459,7 @@ class QueryBuilder(EventsArtefacts):
         selects = []
 
         for item in group_by:
-            key = item["key"]
+            key = self._sql_safe_identifier(item["key"], "group_by key")
             source = item.get("source")
 
             if key in CORE_FIELDS:
@@ -475,12 +479,26 @@ class QueryBuilder(EventsArtefacts):
 
         return selects
 
-    def _props_join_expression(self, event_name: str, alias: str, key: str):
-        """Return LEFT JOIN clause for a specific property key (unified event_props table)."""
+    def _props_join_expression(
+        self, event_name: str, alias: str, key: str, start: str | None = None, end: str | None = None
+    ):
+        """Return LEFT JOIN clause for a specific property key (unified event_props table).
 
+        Given the query's time window, only that window of event_props is joined: ClickHouse
+        builds the join's hash table from the whole right side, and event_props for all time
+        ran past the server memory limit (2026-11-13).
+        """
+        key = self._escape_sql_string(key)
+        if start is None or end is None:
+            return (
+                f"LEFT JOIN {self._event_props_table_name()} AS {alias} "
+                f"ON e.event_id = {alias}.event_id AND {alias}.event_name = '{event_name}' AND {alias}.key = '{key}'"
+            )
         return (
-            f"LEFT JOIN {self._event_props_table_name()} AS {alias} "
-            f"ON e.event_id = {alias}.event_id AND {alias}.event_name = '{event_name}' AND {alias}.key = '{key}'"
+            f"LEFT JOIN (SELECT event_id, value FROM {self._event_props_table_name()} "
+            f"WHERE event_name = '{event_name}' AND key = '{key}' "
+            f"AND client_ts >= '{start}' AND client_ts < '{end}') AS {alias} "
+            f"ON e.event_id = {alias}.event_id"
         )
 
     def _user_profile_join_expression(self, alias: str, key: str) -> str:
@@ -507,19 +525,23 @@ class QueryBuilder(EventsArtefacts):
         )
 
     def _group_props_join_expression(
-        self, event_name: str, group_by: list[GroupByType]
+        self,
+        event_name: str,
+        group_by: list[GroupByType],
+        start: str | None = None,
+        end: str | None = None,
     ) -> list[str]:
         joins = []
 
         for item in group_by:
-            key = item["key"]
+            key = self._sql_safe_identifier(item["key"], "group_by key")
             source = item["source"]
 
             if key not in CORE_FIELDS:
                 # Choose alias and join helper depending on source
                 if source == KeySource.EVENT_PROPERTIES:
                     alias = f"ep_{key}"
-                    joins.append(self._props_join_expression(event_name, alias, key))
+                    joins.append(self._props_join_expression(event_name, alias, key, start, end))
                 elif source == KeySource.USER_EXPERIENCE:
                     alias = f"ue_{key}"
                     joins.append(self._user_experience_join_expression(alias, key))
@@ -535,7 +557,11 @@ class QueryBuilder(EventsArtefacts):
         return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
     def _wheres_and_joins(
-        self, event_name: str, filters: dict[str, EnhancedFilterType] | None
+        self,
+        event_name: str,
+        filters: dict[str, EnhancedFilterType] | None,
+        start: str | None = None,
+        end: str | None = None,
     ) -> tuple[list[str], list[str]]:
         """Generate SQL WHERE snippets and JOIN clauses for filters."""
         filters = filters or {}
@@ -556,7 +582,7 @@ class QueryBuilder(EventsArtefacts):
                 wheres.append(f"e.{key} {op} '{value}'")
             elif source == KeySource.EVENT_PROPERTIES:
                 alias = f"ep_{key}"
-                joins.append(self._props_join_expression(event_name, alias, key))
+                joins.append(self._props_join_expression(event_name, alias, key, start, end))
                 wheres.append(f"{alias}.value {op} '{value}'")
             else:  # User Profile
                 # Support user_experience (personalisation) as a source too

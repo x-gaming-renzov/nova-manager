@@ -102,7 +102,14 @@ class TestAggregationQuery:
             "property": "step_number", "aggregation": agg,
             "time_range": TR, "granularity": "daily", "group_by": [], "filters": {},
         })
-        assert f"{agg.upper()}(toFloat64(p_val.value)) AS value" in sql
+        # Requirement changed 2026-11-13: an event without the property (LEFT JOIN fills '') counts
+        # as NULL instead of failing with Code 72; a non-numeric value still fails loudly, because a
+        # money sum must not quietly come back short. (toFloat64 on a Nullable string returns NULL
+        # rather than raising in ClickHouse 24.8, so the failure has to be an explicit throwIf.)
+        assert (
+            f"{agg.upper()}(toFloat64OrNull(p_val.value) + throwIf(p_val.value != '' AND "
+            "toFloat64OrNull(p_val.value) IS NULL, 'non-numeric value in aggregated property step_number')) AS value"
+        ) in sql
 
     def test_aggregation_joins_property(self):
         sql = _qb().build_query("aggregation", {
@@ -111,6 +118,139 @@ class TestAggregationQuery:
         })
         assert "p_val" in sql
         assert "amount" in sql
+
+
+# ── Event-property joins read only the requested window ─────────────
+# Regression for 2026-11-13: PB's aggregation KPIs joined event_props for all time, built a
+# multi-GB hash table and failed with MEMORY_LIMIT_EXCEEDED after 5-10 s.
+
+PROPS = _qb()._event_props_table_name()
+RAW = _qb()._raw_events_table_name()
+
+
+def _bounded_join(alias, event_name, key, start=TR["start"], end=TR["end"]):
+    return (
+        f"LEFT JOIN (SELECT event_id, value FROM {PROPS} "
+        f"WHERE event_name = '{event_name}' AND key = '{key}' "
+        f"AND client_ts >= '{start}' AND client_ts < '{end}') AS {alias} "
+        f"ON e.event_id = {alias}.event_id"
+    )
+
+
+def _assert_no_unbounded_props_join(sql: str):
+    assert f"LEFT JOIN {PROPS} AS" not in sql, f"event_props joined for all time:\n{sql}"
+
+
+class TestTimeBoundedPropertyJoins:
+    def test_aggregation_property_join_reads_only_the_requested_window(self):
+        sql = _qb().build_query("aggregation", {
+            "event_name": "incentive.earned", "property": "amount", "aggregation": "sum",
+            "time_range": TR, "granularity": "none", "group_by": [], "filters": {},
+        })
+        assert _bounded_join("p_val", "incentive.earned", "amount") in sql
+        _assert_no_unbounded_props_join(sql)
+
+    def test_count_event_property_filter_join_reads_only_the_requested_window(self):
+        sql = _qb().build_query("count", {
+            "event_name": "screen.viewed", "distinct": False, "time_range": TR,
+            "granularity": "daily", "group_by": [],
+            "filters": {"page": {"value": "home", "op": "=", "source": "event_properties"}},
+        })
+        assert _bounded_join("ep_page", "screen.viewed", "page") in sql
+        assert "ep_page.value = 'home'" in sql
+        _assert_no_unbounded_props_join(sql)
+
+    def test_group_by_event_property_join_reads_only_the_requested_window(self):
+        sql = _qb().build_query("count", {
+            "event_name": "screen.viewed", "distinct": False, "time_range": TR,
+            "granularity": "daily", "group_by": [{"key": "page", "source": "event_properties"}],
+            "filters": {},
+        })
+        assert _bounded_join("ep_page", "screen.viewed", "page") in sql
+        assert "ep_page.value AS page" in sql
+        _assert_no_unbounded_props_join(sql)
+
+    def test_ratio_numerator_and_denominator_property_joins_read_only_the_window(self):
+        sql = _qb().build_query("ratio", {
+            "numerator": {"event_name": "purchase", "distinct": False,
+                          "filters": {"plan": {"value": "pro", "op": "=", "source": "event_properties"}}},
+            "denominator": {"event_name": "checkout", "distinct": False,
+                            "filters": {"plan": {"value": "pro", "op": "=", "source": "event_properties"}}},
+            "time_range": TR, "granularity": "daily", "group_by": [], "filters": {},
+        })
+        assert _bounded_join("ep_plan", "purchase", "plan") in sql
+        assert _bounded_join("ep_plan", "checkout", "plan") in sql
+        _assert_no_unbounded_props_join(sql)
+
+    def test_relative_time_range_bounds_the_join_with_the_same_window_as_the_events(self):
+        sql = _qb().build_query("aggregation", {
+            "event_name": "tournament.joined", "property": "team_size", "aggregation": "sum",
+            "time_range": "7d", "granularity": "daily", "group_by": [], "filters": {},
+        })
+        event_window = re.search(r"e\.client_ts >= '([^']+)' AND e\.client_ts < '([^']+)'", sql)
+        join_window = re.search(r"AND client_ts >= '([^']+)' AND client_ts < '([^']+)'\) AS p_val", sql)
+        assert event_window and join_window, sql
+        assert join_window.groups() == event_window.groups()
+
+    def test_property_key_with_a_quote_cannot_break_out_of_the_join(self):
+        sql = _qb().build_query("aggregation", {
+            "event_name": "incentive.earned", "property": "amount' OR 1=1 --", "aggregation": "sum",
+            "time_range": TR, "granularity": "none", "group_by": [], "filters": {},
+        })
+        assert "key = 'amount\\' OR 1=1 --'" in sql
+
+    def test_golden_pb_monthly_sum_of_incentive_amount(self):
+        """PB's KPI 'incentive.earned amount, whole month' — the exact query Nova must send."""
+        month = {"start": "2026-10-31 18:30:00", "end": "2026-11-30 18:30:00"}
+        sql = _qb().build_query("aggregation", {
+            "event_name": "incentive.earned", "property": "amount", "aggregation": "sum",
+            "time_range": month, "granularity": "none", "group_by": [], "filters": {},
+        })
+        expected = (
+            "SELECT toDateTime('1970-01-01 00:00:00') AS period,\n"
+            "    SUM(toFloat64OrNull(p_val.value) + throwIf(p_val.value != '' AND "
+            "toFloat64OrNull(p_val.value) IS NULL, 'non-numeric value in aggregated property amount')) AS value\n"
+            f"FROM {RAW} AS e\n"
+            f"LEFT JOIN (SELECT event_id, value FROM {PROPS} "
+            "WHERE event_name = 'incentive.earned' AND key = 'amount' "
+            "AND client_ts >= '2026-10-31 18:30:00' AND client_ts < '2026-11-30 18:30:00') AS p_val "
+            "ON e.event_id = p_val.event_id\n"
+            "WHERE e.event_name = 'incentive.earned' "
+            "AND e.client_ts >= '2026-10-31 18:30:00' AND e.client_ts < '2026-11-30 18:30:00'\n"
+            "GROUP BY period"
+        )
+        assert sql.strip() == expected
+
+
+class TestGroupByKeyValidation:
+    """group_by keys become SQL aliases and column names; one ClickHouse user serves every tenant,
+    so an unchecked key could read another tenant's database."""
+
+    HOSTILE = "page FROM system.tables --"
+
+    @pytest.mark.parametrize("source", ["event_properties", "user_profile", "user_experience"])
+    def test_group_by_key_with_sql_in_it_is_refused(self, source):
+        with pytest.raises(ValueError, match="Unsafe characters in group_by key"):
+            _qb().build_query("count", {
+                "event_name": "screen.viewed", "distinct": False, "time_range": TR, "granularity": "daily",
+                "group_by": [{"key": self.HOSTILE, "source": source}], "filters": {},
+            })
+
+    def test_aggregation_group_by_key_with_sql_in_it_is_refused(self):
+        with pytest.raises(ValueError, match="Unsafe characters in group_by key"):
+            _qb().build_query("aggregation", {
+                "event_name": "incentive.earned", "property": "amount", "aggregation": "sum",
+                "time_range": TR, "granularity": "none",
+                "group_by": [{"key": self.HOSTILE, "source": "event_properties"}], "filters": {},
+            })
+
+    def test_ordinary_group_by_keys_still_work(self):
+        sql = _qb().build_query("count", {
+            "event_name": "screen.viewed", "distinct": False, "time_range": TR, "granularity": "daily",
+            "group_by": [{"key": "page_name", "source": "event_properties"},
+                         {"key": "user_id", "source": "event_properties"}], "filters": {},
+        })
+        assert "ep_page_name.value AS page_name" in sql and "e.user_id AS user_id" in sql
 
 
 # ── Ratio queries ────────────────────────────────────────────
