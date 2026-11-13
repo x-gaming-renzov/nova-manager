@@ -1,10 +1,12 @@
 import copy
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from nova_manager.api.metrics.request_response import (
     CreateMetricRequest,
     ComputeMetricRequest,
+    ComputeMetricsBatchRequest,
     EventsSchemaResponse,
     IngestBusinessDataRequest,
     MetricResponse,
@@ -28,6 +30,7 @@ from nova_manager.components.auth.dependencies import (
     require_app_context,
     require_sdk_app_context,
 )
+from nova_manager.core.log import logger
 from nova_manager.core.security import AuthContext, SDKAuthContext
 from sqlalchemy.orm import Session
 
@@ -75,12 +78,10 @@ async def track_events(
     return {"success": True, "count": len(events)}
 
 
-@router.post("/compute/", response_model=List[Dict])
-async def compute_metric(
-    compute_request: ComputeMetricRequest,
-    auth: AuthContext = Depends(require_app_context),
-    db: Session = Depends(get_db),
-):
+def _build_compute_query(
+    compute_request: ComputeMetricRequest, auth: AuthContext, db: Session
+) -> str:
+    """SQL for one compute request, with its segment and personalisation filters resolved."""
     organisation_id = auth.organisation_id
     app_id = auth.app_id
     type = compute_request.type
@@ -127,12 +128,70 @@ async def compute_metric(
         }
 
     query_builder = QueryBuilder(organisation_id, app_id)
-    query = query_builder.build_query(type, config)
+    return query_builder.build_query(type, config)
 
-    clickhouse_service = ClickHouseService()
-    result = clickhouse_service.run_query(query)
 
-    return result
+# The ClickHouse VM has 2 vCPUs: across every compute request on an instance, at most 4 metric
+# queries run at once, and none may run past 60 s (twice PB's 30 s gateway timeout) holding a slot.
+_METRIC_QUERY_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="metric-query")
+_METRIC_QUERY_SETTINGS = {"max_execution_time": 60}
+
+
+def _run_metric_query(query: str) -> list[dict]:
+    return ClickHouseService().run_query(query, settings=_METRIC_QUERY_SETTINGS)
+
+
+# Sync on purpose: the ClickHouse call blocks, so FastAPI must run this on its threadpool.
+# As `async def` it froze the event loop, serialising parallel calls and every other request.
+@router.post("/compute/", response_model=List[Dict])
+def compute_metric(
+    compute_request: ComputeMetricRequest,
+    auth: AuthContext = Depends(require_app_context),
+    db: Session = Depends(get_db),
+):
+    query = _build_compute_query(compute_request, auth, db)
+    return _METRIC_QUERY_POOL.submit(_run_metric_query, query).result()
+
+
+def _failed_metric(
+    index: int, metric: ComputeMetricRequest, auth: AuthContext, error: Exception
+) -> dict:
+    logger.warning(f"compute-batch metric {index} ({metric.type}) failed for app {auth.app_id}: {error}")
+    return {"status": 500, "error": str(error)}
+
+
+@router.post("/compute-batch/")
+def compute_metrics_batch(
+    batch: ComputeMetricsBatchRequest,
+    auth: AuthContext = Depends(require_app_context),
+    db: Session = Depends(get_db),
+):
+    """Compute several metrics in one request, in parallel; results come back in request order.
+
+    Each result is {"status": 200, "data": rows} or {"status": <code>, "error": <reason>}, so one
+    failing metric does not fail the others. Queries are built here, on the request's own DB session,
+    and only the ClickHouse calls go to the shared pool.
+    """
+    results: list[dict | None] = [None] * len(batch.metrics)
+    pending = {}
+    for index, metric in enumerate(batch.metrics):
+        try:
+            query = _build_compute_query(metric, auth, db)
+        except HTTPException as e:
+            results[index] = {"status": e.status_code, "error": e.detail}
+            continue
+        except Exception as e:
+            results[index] = _failed_metric(index, metric, auth, e)
+            continue
+        pending[index] = _METRIC_QUERY_POOL.submit(_run_metric_query, query)
+
+    for index, future in pending.items():
+        try:
+            results[index] = {"status": 200, "data": future.result()}
+        except Exception as e:
+            results[index] = _failed_metric(index, batch.metrics[index], auth, e)
+
+    return {"results": results}
 
 
 @router.get("/events-schema/", response_model=List[EventsSchemaResponse])

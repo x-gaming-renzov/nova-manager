@@ -52,6 +52,10 @@ class ComputeMetricRequest(BaseModel):
     config: Dict[str, Any]
 
 
+class ComputeMetricsBatchRequest(BaseModel):
+    metrics: List[ComputeMetricRequest] = Field(min_length=1, max_length=25)
+
+
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 
 

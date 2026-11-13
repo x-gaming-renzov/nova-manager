@@ -125,6 +125,10 @@ class _RecordingClient:
             raise RuntimeError("Code: 16. No such column")
         self.inserts.append(kwargs)
 
+    def query(self, query, **kwargs):
+        self.queries = getattr(self, "queries", []) + [kwargs]
+        return type("Result", (), {"result_rows": [], "column_names": []})()
+
 
 @pytest.fixture
 def recording_client(monkeypatch):
@@ -151,6 +155,16 @@ def test_a_different_column_set_gets_its_own_types(recording_client):
 def test_inserts_are_batched_by_the_server_and_still_wait_so_failures_raise(recording_client):
     clickhouse_service.ClickHouseService().insert_rows("db.raw_events", [{"user_id": "u"}])
     assert recording_client.inserts[0]["settings"] == {"async_insert": 1, "wait_for_async_insert": 1}
+
+
+def test_a_query_sends_its_settings_so_metric_queries_can_be_time_limited(recording_client):
+    clickhouse_service.ClickHouseService().run_query("SELECT 1", settings={"max_execution_time": 60})
+    assert recording_client.queries[0]["settings"] == {"max_execution_time": 60}
+
+
+def test_a_query_without_settings_sends_none_so_existing_callers_are_unchanged(recording_client):
+    clickhouse_service.ClickHouseService().run_query("SELECT 1", parameters={"x": 1})
+    assert recording_client.queries[0] == {"parameters": {"x": 1}, "settings": None}
 
 
 def test_a_failed_insert_raises_and_looks_the_types_up_again_in_case_the_schema_changed(recording_client):
